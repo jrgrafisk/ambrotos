@@ -1,5 +1,5 @@
 {
-  "exported_at": "2026-02-21T20:59:50.728712",
+  "exported_at": "2026-02-21T21:00:29.827306",
   "unavailable_dates": [
     {
       "user_id": 9,
@@ -62,6 +62,12 @@
       "user_id": 9,
       "text": "test",
       "created_at": "2026-02-21T20:59:50.722375"
+    },
+    {
+      "event_id": 1,
+      "user_id": 3,
+      "text": "ads",
+      "created_at": "2026-02-21T21:00:29.821229"
     }
   ]
 }
