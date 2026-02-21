@@ -224,6 +224,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     color = db.Column(db.String(7), nullable=False, default='#1e88e5')
+    is_admin = db.Column(db.Boolean, nullable=False, default=False)
     unavailable_dates = db.relationship(
         'UnavailableDate', backref='user', lazy=True, cascade='all, delete-orphan'
     )
@@ -275,6 +276,41 @@ class EventComment(db.Model):
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+from functools import wraps
+
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_admin:
+            return jsonify({'error': 'Ikke tilladt'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+def user_stats(user_id: int) -> dict:
+    """Compute 12-month stats for a user."""
+    cutoff = date.today() - timedelta(days=365)
+    recent_events = GroupEvent.query.filter(GroupEvent.date >= cutoff).all()
+    user_unavail = {
+        ud.date for ud in UnavailableDate.query.filter(
+            UnavailableDate.user_id == user_id,
+            UnavailableDate.date >= cutoff,
+        ).all()
+    }
+    kan_ikke = sum(1 for e in recent_events if e.date in user_unavail)
+    return {
+        'events_created': GroupEvent.query.filter(
+            GroupEvent.created_by == user_id,
+            GroupEvent.date >= cutoff,
+        ).count(),
+        'kan_deltage':    len(recent_events) - kan_ikke,
+        'kan_ikke':       kan_ikke,
+        'unavail_days':   len(user_unavail),
+    }
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -565,6 +601,92 @@ def add_event_comment(event_id):
     }), 201
 
 
+# ── Admin routes ───────────────────────────────────────────────────────────────
+
+@app.route('/admin')
+@login_required
+def admin_panel():
+    if not current_user.is_admin:
+        flash('Ingen adgang.', 'error')
+        return redirect(url_for('index'))
+    users = User.query.order_by(User.id).all()
+    stats = {u.id: user_stats(u.id) for u in users}
+    return render_template('admin.html', users=users, stats=stats)
+
+
+@app.route('/api/admin/users', methods=['GET'])
+@login_required
+@admin_required
+def admin_list_users():
+    users = User.query.order_by(User.id).all()
+    return jsonify([{
+        'id': u.id,
+        'username': u.username,
+        'color': u.color,
+        'is_admin': u.is_admin,
+        **user_stats(u.id),
+    } for u in users])
+
+
+@app.route('/api/admin/users', methods=['POST'])
+@login_required
+@admin_required
+def admin_create_user():
+    data = request.get_json()
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+    color    = data.get('color', '#1e88e5').strip()
+    if not username or not password:
+        return jsonify({'error': 'Navn og adgangskode er påkrævet'}), 400
+    if User.query.filter_by(username=username).first():
+        return jsonify({'error': 'Brugernavn er allerede i brug'}), 400
+    u = User(username=username, color=color)
+    u.set_password(password)
+    db.session.add(u)
+    db.session.commit()
+    return jsonify({'id': u.id, 'username': u.username, 'color': u.color}), 201
+
+
+@app.route('/api/admin/users/<int:user_id>', methods=['PUT'])
+@login_required
+@admin_required
+def admin_update_user(user_id):
+    u = db.session.get(User, user_id)
+    if not u:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    data = request.get_json()
+    if 'username' in data:
+        new_name = data['username'].strip()
+        if not new_name:
+            return jsonify({'error': 'Navn må ikke være tomt'}), 400
+        existing = User.query.filter_by(username=new_name).first()
+        if existing and existing.id != user_id:
+            return jsonify({'error': 'Brugernavn er allerede i brug'}), 400
+        u.username = new_name
+    if 'color' in data:
+        u.color = data['color']
+    if 'password' in data and data['password'].strip():
+        u.set_password(data['password'].strip())
+    if 'is_admin' in data:
+        u.is_admin = bool(data['is_admin'])
+    db.session.commit()
+    return jsonify({'id': u.id, 'username': u.username, 'color': u.color, 'is_admin': u.is_admin})
+
+
+@app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
+@login_required
+@admin_required
+def admin_delete_user(user_id):
+    if user_id == current_user.id:
+        return jsonify({'error': 'Du kan ikke slette din egen konto'}), 400
+    u = db.session.get(User, user_id)
+    if not u:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    db.session.delete(u)
+    db.session.commit()
+    return jsonify({'deleted': True})
+
+
 # ── Database seed ──────────────────────────────────────────────────────────────
 
 def init_db():
@@ -582,6 +704,15 @@ def init_db():
         else:
             db_type = 'PostgreSQL' if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite'
             print(f"✓ Forbundet til {db_type} — {User.query.count()} brugere, data intakt")
+
+        # Ensure at least one admin exists (Kasper by default)
+        if not User.query.filter_by(is_admin=True).first():
+            admin = User.query.filter(User.username.ilike('%kasper%')).first() \
+                    or User.query.order_by(User.id).first()
+            if admin:
+                admin.is_admin = True
+                db.session.commit()
+                print(f"  Admin: {admin.username}")
 
 
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').

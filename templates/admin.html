@@ -1,0 +1,244 @@
+{% extends 'base.html' %}
+{% block title %}Admin – Ambrotos{% endblock %}
+
+{% block content %}
+<div class="admin-layout">
+
+  <!-- ── Header ─────────────────────────────────────────────────── -->
+  <header class="admin-header">
+    <div class="admin-header-left">
+      <a href="{{ url_for('index') }}" class="btn btn-outline btn-sm">← Kalender</a>
+      <h1 class="admin-title">Brugerstyring</h1>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Tilføj bruger</button>
+  </header>
+
+  <!-- ── Stats table ────────────────────────────────────────────── -->
+  <div class="admin-card">
+    <table class="admin-table" id="userTable">
+      <thead>
+        <tr>
+          <th>Bruger</th>
+          <th>Farve</th>
+          <th title="Events oprettet i de seneste 12 måneder">Events<br><small>12 mdr.</small></th>
+          <th title="Antal group events med kan-deltage status i de seneste 12 måneder">Kan deltage<br><small>12 mdr.</small></th>
+          <th title="Antal group events med kan-ikke-deltage status i de seneste 12 måneder">Kan ikke<br><small>12 mdr.</small></th>
+          <th title="Dage markeret som utilgængelig i de seneste 12 måneder">Utilgæng.<br><small>dage</small></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr id="row-{{ u.id }}">
+          <td class="user-cell">
+            <span class="table-dot" style="background:{{ u.color }}"></span>
+            <span class="user-name-cell">{{ u.username }}</span>
+            {% if u.is_admin %}<span class="admin-badge">admin</span>{% endif %}
+            {% if u.id == current_user.id %}<span class="you-badge">dig</span>{% endif %}
+          </td>
+          <td>
+            <span class="color-swatch" style="background:{{ u.color }}"></span>
+            <code class="color-code">{{ u.color }}</code>
+          </td>
+          <td class="stat-cell">{{ stats[u.id].events_created }}</td>
+          <td class="stat-cell stat-green">{{ stats[u.id].kan_deltage }}</td>
+          <td class="stat-cell stat-red">{{ stats[u.id].kan_ikke }}</td>
+          <td class="stat-cell stat-muted">{{ stats[u.id].unavail_days }}</td>
+          <td class="action-cell">
+            <button class="btn btn-outline btn-sm" onclick="openEditModal({{ u.id }}, '{{ u.username }}', '{{ u.color }}', {{ u.is_admin|tojson }})">Rediger</button>
+            {% if u.id != current_user.id %}
+            <button class="btn btn-sm btn-danger" onclick="deleteUser({{ u.id }}, '{{ u.username }}')">Slet</button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Edit user modal ─────────────────────────────────────────── -->
+<div class="modal-overlay" id="editOverlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Rediger bruger</h3>
+      <button class="modal-close" onclick="closeEditModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editUserId">
+      <div class="form-group">
+        <label for="editName">Navn</label>
+        <input type="text" id="editName" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="editColor">Farve</label>
+        <div class="color-input-row">
+          <input type="color" id="editColorPicker" oninput="document.getElementById('editColorText').value=this.value">
+          <input type="text"  id="editColorText"   maxlength="7" placeholder="#1e88e5"
+                 oninput="syncColorPicker(this.value)">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="editPassword">Ny adgangskode <span class="label-hint">(lad stå tom for at beholde)</span></label>
+        <input type="password" id="editPassword" autocomplete="new-password" placeholder="Ny adgangskode…">
+      </div>
+      <div class="form-group form-check">
+        <label>
+          <input type="checkbox" id="editIsAdmin">
+          Admin-rettigheder
+        </label>
+      </div>
+      <div id="editError" class="form-error" style="display:none"></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary btn-full" onclick="submitEdit()">Gem ændringer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add user modal ─────────────────────────────────────────── -->
+<div class="modal-overlay" id="addOverlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Tilføj bruger</h3>
+      <button class="modal-close" onclick="closeAddModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label for="addName">Navn</label>
+        <input type="text" id="addName" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="addColor">Farve</label>
+        <div class="color-input-row">
+          <input type="color" id="addColorPicker" value="#1e88e5"
+                 oninput="document.getElementById('addColorText').value=this.value">
+          <input type="text"  id="addColorText" value="#1e88e5" maxlength="7"
+                 oninput="syncColorPickerAdd(this.value)">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="addPassword">Adgangskode</label>
+        <input type="password" id="addPassword" autocomplete="new-password">
+      </div>
+      <div id="addError" class="form-error" style="display:none"></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary btn-full" onclick="submitAdd()">Opret bruger</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ── Edit modal ─────────────────────────────────── */
+function openEditModal(id, name, color, isAdmin) {
+  document.getElementById('editUserId').value   = id;
+  document.getElementById('editName').value     = name;
+  document.getElementById('editColorPicker').value = color;
+  document.getElementById('editColorText').value   = color;
+  document.getElementById('editPassword').value = '';
+  document.getElementById('editIsAdmin').checked = isAdmin;
+  document.getElementById('editError').style.display = 'none';
+  document.getElementById('editOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('editName').focus(), 50);
+}
+
+function closeEditModal() {
+  document.getElementById('editOverlay').style.display = 'none';
+}
+
+async function submitEdit() {
+  const id       = document.getElementById('editUserId').value;
+  const username = document.getElementById('editName').value.trim();
+  const color    = document.getElementById('editColorText').value.trim();
+  const password = document.getElementById('editPassword').value;
+  const is_admin = document.getElementById('editIsAdmin').checked;
+  const errEl    = document.getElementById('editError');
+
+  const body = { username, color, is_admin };
+  if (password) body.password = password;
+
+  const resp = await fetch(`/api/admin/users/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    errEl.textContent = data.error;
+    errEl.style.display = 'block';
+    return;
+  }
+  closeEditModal();
+  location.reload();
+}
+
+function syncColorPicker(val) {
+  if (/^#[0-9a-fA-F]{6}$/.test(val))
+    document.getElementById('editColorPicker').value = val;
+}
+
+/* ── Add modal ──────────────────────────────────── */
+function openAddModal() {
+  document.getElementById('addName').value     = '';
+  document.getElementById('addPassword').value = '';
+  document.getElementById('addColorPicker').value = '#1e88e5';
+  document.getElementById('addColorText').value   = '#1e88e5';
+  document.getElementById('addError').style.display = 'none';
+  document.getElementById('addOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('addName').focus(), 50);
+}
+
+function closeAddModal() {
+  document.getElementById('addOverlay').style.display = 'none';
+}
+
+async function submitAdd() {
+  const username = document.getElementById('addName').value.trim();
+  const password = document.getElementById('addPassword').value.trim();
+  const color    = document.getElementById('addColorText').value.trim();
+  const errEl    = document.getElementById('addError');
+
+  const resp = await fetch('/api/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, color }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    errEl.textContent = data.error;
+    errEl.style.display = 'block';
+    return;
+  }
+  closeAddModal();
+  location.reload();
+}
+
+function syncColorPickerAdd(val) {
+  if (/^#[0-9a-fA-F]{6}$/.test(val))
+    document.getElementById('addColorPicker').value = val;
+}
+
+/* ── Delete ─────────────────────────────────────── */
+async function deleteUser(id, name) {
+  if (!confirm(`Slet ${name}? Alle deres utilgængelighedsdatoer slettes også.`)) return;
+  const resp = await fetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!resp.ok) { alert(data.error); return; }
+  location.reload();
+}
+
+/* ── Keyboard shortcuts ─────────────────────────── */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeEditModal(); closeAddModal(); }
+});
+document.getElementById('editName').addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitEdit();
+});
+document.getElementById('addName').addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitAdd();
+});
+</script>
+{% endblock %}

@@ -15,6 +15,9 @@
     <div class="navbar-user">
       <span class="user-dot" style="background: {{ current_user.color }}"></span>
       <span class="user-name">{{ current_user.username }}</span>
+      {% if current_user.is_admin %}
+      <a href="{{ url_for('admin_panel') }}" class="btn btn-sm btn-outline">⚙ Admin</a>
+      {% endif %}
       <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline">Log ud</a>
     </div>
   </nav>
