@@ -1,5 +1,5 @@
 {
-  "exported_at": "2026-02-21T20:14:19.727739",
+  "exported_at": "2026-02-21T20:14:41.271131",
   "unavailable_dates": [
     {
       "user_id": 9,
@@ -42,6 +42,15 @@
       "date": "2026-02-15"
     }
   ],
-  "group_events": [],
+  "group_events": [
+    {
+      "id": 1,
+      "title": "Livebetting i smallegade",
+      "description": "",
+      "date": "2026-02-22",
+      "created_by": 14,
+      "created_at": "2026-02-21T20:14:41.262288"
+    }
+  ],
   "event_comments": []
 }
