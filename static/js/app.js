@@ -3,14 +3,17 @@
    ══════════════════════════════════════════════════════ */
 
 let calendar;
-let allEvents = [];   // local cache of events
+let allEvents     = [];   // local cache of FullCalendar events
+let eventMode     = false;
+let currentEventId = null;
+let pendingEventDate = null;
 
-/* ─── Bootstrap ────────────────────────────────────── */
+/* ─── Bootstrap ─────────────────────────────────────── */
 
 document.addEventListener('DOMContentLoaded', () => {
   initCalendar();
-  initChat();
-  initModal();
+  initModals();
+  loadUpcomingEvents();
 });
 
 /* ══════════════════════════════════════════════════════
@@ -22,7 +25,7 @@ function initCalendar() {
   calendar = new FullCalendar.Calendar(el, {
     initialView: 'dayGridMonth',
     locale: 'da',
-    firstDay: 1,          // Monday first
+    firstDay: 1,
     headerToolbar: {
       left:   'prev,next today',
       center: 'title',
@@ -40,13 +43,18 @@ function initCalendar() {
     height: 'auto',
     eventDidMount(info) {
       const props = info.event.extendedProps;
-      info.el.title = props.isHoliday ? props.holidayName : props.username;
+      if (props.isGroupEvent) {
+        info.el.title = info.event.title;
+      } else if (props.isHoliday) {
+        info.el.title = props.holidayName;
+      } else {
+        info.el.title = props.username;
+      }
     },
   });
   calendar.render();
 }
 
-/* Fetch events and cache them locally */
 async function fetchEvents(fetchInfo, successCallback, failureCallback) {
   try {
     const resp = await fetch('/api/events');
@@ -62,52 +70,92 @@ function refreshCalendar() {
   if (calendar) calendar.refetchEvents();
 }
 
+/* ── Event mode toggle ───────────────────────────────── */
+
+function toggleEventMode() {
+  eventMode = !eventMode;
+  const btn  = document.getElementById('eventModeBtn');
+  const hint = document.getElementById('eventModeHint');
+  const cal  = document.getElementById('calendar');
+  if (eventMode) {
+    btn.classList.add('active');
+    btn.textContent = '✕ Annuller';
+    hint.style.display = 'inline';
+    cal.classList.add('event-mode-active');
+  } else {
+    btn.classList.remove('active');
+    btn.textContent = '+ Opret event';
+    hint.style.display = 'none';
+    cal.classList.remove('event-mode-active');
+  }
+}
+
 /* ── Event / date click ──────────────────────────────── */
 
 function onEventClick(info) {
-  showDateModal(info.event.startStr);
+  const props = info.event.extendedProps;
+  if (props.isGroupEvent) {
+    showEventDetailModal(props.eventId);
+  } else {
+    showDateModal(info.event.startStr);
+  }
 }
 
 function onDateClick(info) {
-  showDateModal(info.dateStr);
+  if (eventMode) {
+    openEventCreateModal(info.dateStr);
+  } else {
+    showDateModal(info.dateStr);
+  }
 }
 
 /* ══════════════════════════════════════════════════════
-   Modal
+   Date modal (unavailability)
    ══════════════════════════════════════════════════════ */
 
-function initModal() {
+function initModals() {
   document.getElementById('modalClose').addEventListener('click', closeModal);
   document.getElementById('modalOverlay').addEventListener('click', e => {
     if (e.target === document.getElementById('modalOverlay')) closeModal();
   });
+  document.getElementById('eventCreateOverlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('eventCreateOverlay')) closeEventCreateModal();
+  });
+  document.getElementById('eventDetailOverlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('eventDetailOverlay')) closeEventDetailModal();
+  });
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Escape') {
+      closeModal();
+      closeEventCreateModal();
+      closeEventDetailModal();
+    }
+  });
+  document.getElementById('commentInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitComment(); }
+  });
+  document.getElementById('eventTitle').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitEventCreate();
   });
 }
 
 function showDateModal(dateStr) {
-  /* Format the date in Danish */
   const dateObj = new Date(dateStr + 'T12:00:00');
   const formatted = dateObj.toLocaleDateString('da-DK', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   });
   document.getElementById('modalDate').textContent =
     formatted.charAt(0).toUpperCase() + formatted.slice(1);
 
-  /* Filter cached events for this date */
-  const dayEvents = allEvents.filter(e => e.start === dateStr);
-  const holidayEvents = dayEvents.filter(e => e.extendedProps.isHoliday);
-  const userEvents = dayEvents.filter(e => !e.extendedProps.isHoliday);
-  const body = document.getElementById('modalBody');
+  const dayEvents   = allEvents.filter(e => e.start === dateStr);
+  const holidayEvts = dayEvents.filter(e => e.extendedProps.isHoliday);
+  const unavailEvts = dayEvents.filter(e => !e.extendedProps.isHoliday && !e.extendedProps.isGroupEvent);
+  const body        = document.getElementById('modalBody');
 
   let html = '';
 
-  if (holidayEvents.length > 0) {
-    html += holidayEvents.map(ev => `
+  if (holidayEvts.length > 0) {
+    html += holidayEvts.map(ev => `
       <div class="modal-holiday">
         <span class="modal-holiday-icon">🎉</span>
         <span class="modal-holiday-name">${escapeHtml(ev.extendedProps.holidayName)}</span>
@@ -115,10 +163,10 @@ function showDateModal(dateStr) {
     `).join('');
   }
 
-  if (userEvents.length === 0) {
+  if (unavailEvts.length === 0) {
     html += '<p class="modal-empty">Ingen er utilgængelige denne dag.</p>';
   } else {
-    html += userEvents.map(ev => `
+    html += unavailEvts.map(ev => `
       <div class="modal-member">
         <span class="modal-dot" style="background:${ev.color}"></span>
         <span class="modal-member-name">
@@ -126,7 +174,7 @@ function showDateModal(dateStr) {
           ${ev.extendedProps.isOwn ? '<span class="modal-member-you">(dig)</span>' : ''}
         </span>
         ${ev.extendedProps.isOwn
-          ? `<button class="btn btn-sm btn-danger" onclick="deleteDateViaChat('${dateStr}')">Slet</button>`
+          ? `<button class="btn btn-sm btn-danger" onclick="toggleUnavailable('${dateStr}')">Slet</button>`
           : ''}
       </div>
     `).join('');
@@ -134,20 +182,17 @@ function showDateModal(dateStr) {
 
   body.innerHTML = html;
 
-  /* Actions for the current user */
-  const hasOwn = userEvents.some(e => e.extendedProps.isOwn);
-  const actions = document.createElement('div');
-  actions.className = 'modal-actions';
-
+  const hasOwn = unavailEvts.some(e => e.extendedProps.isOwn);
   if (!hasOwn) {
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
     const addBtn = document.createElement('button');
     addBtn.className = 'btn btn-primary btn-full';
     addBtn.textContent = 'Markér mig som utilgængelig';
-    addBtn.onclick = () => addDateViaChat(dateStr);
+    addBtn.onclick = () => toggleUnavailable(dateStr);
     actions.appendChild(addBtn);
+    body.appendChild(actions);
   }
-
-  body.appendChild(actions);
 
   document.getElementById('modalOverlay').style.display = 'flex';
 }
@@ -156,114 +201,194 @@ function closeModal() {
   document.getElementById('modalOverlay').style.display = 'none';
 }
 
-/* Called from modal "Slet" button */
-async function deleteDateViaChat(dateStr) {
+async function toggleUnavailable(dateStr) {
   closeModal();
-  await sendChatMessage(`slet ${dateStr}`);
-}
-
-/* Called from modal "Markér mig" button */
-async function addDateViaChat(dateStr) {
-  closeModal();
-  await sendChatMessage(`Jeg kan ikke den ${dateStr}`);
-}
-
-/* ══════════════════════════════════════════════════════
-   Chat
-   ══════════════════════════════════════════════════════ */
-
-function initChat() {
-  const input   = document.getElementById('chatInput');
-  const sendBtn = document.getElementById('chatSend');
-
-  sendBtn.addEventListener('click', handleSend);
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  });
-}
-
-function handleSend() {
-  const input = document.getElementById('chatInput');
-  const text  = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  sendChatMessage(text);
-}
-
-async function sendChatMessage(message) {
-  addBubble(message, 'user');
-  const typing = addTypingIndicator();
-  setSendDisabled(true);
-
   try {
-    const resp = await fetch('/api/chat', {
+    const resp = await fetch('/api/unavailable/toggle', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ message }),
+      body:    JSON.stringify({ date: dateStr }),
     });
-
-    const data = await resp.json();
-    removeTypingIndicator(typing);
-
-    if (data.error) {
-      addBubble(`Fejl: ${data.error}`, 'ai');
-    } else {
-      addBubble(data.response, 'ai');
-      if (data.added?.length || data.deleted?.length) {
-        refreshCalendar();
-      }
-    }
+    if (resp.ok) refreshCalendar();
   } catch (err) {
-    removeTypingIndicator(typing);
-    addBubble('Fejl: Kunne ikke forbinde til serveren. Prøv igen.', 'ai');
-  } finally {
-    setSendDisabled(false);
-    document.getElementById('chatInput').focus();
+    console.error('Toggle unavailable error:', err);
   }
 }
 
-/* ── Chat helpers ────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════
+   Event create modal
+   ══════════════════════════════════════════════════════ */
 
-function addBubble(text, type) {
-  const container = document.getElementById('chatMessages');
-  const wrap = document.createElement('div');
-  wrap.className = `chat-message ${type}`;
-  const bubble = document.createElement('div');
-  bubble.className = 'chat-bubble';
-  bubble.textContent = text;
-  wrap.appendChild(bubble);
-  container.appendChild(wrap);
-  container.scrollTop = container.scrollHeight;
-  return wrap;
+function openEventCreateModal(dateStr) {
+  pendingEventDate = dateStr;
+  const dateObj = new Date(dateStr + 'T12:00:00');
+  const formatted = dateObj.toLocaleDateString('da-DK', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  });
+  document.getElementById('eventCreateDate').textContent =
+    formatted.charAt(0).toUpperCase() + formatted.slice(1);
+  document.getElementById('eventTitle').value = '';
+  document.getElementById('eventDesc').value  = '';
+  document.getElementById('eventCreateOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('eventTitle').focus(), 50);
 }
 
-function addTypingIndicator() {
-  const container = document.getElementById('chatMessages');
-  const wrap = document.createElement('div');
-  wrap.className = 'chat-message ai typing';
-  wrap.innerHTML = `
-    <div class="chat-bubble">
-      <div class="typing-dots">
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
+function closeEventCreateModal() {
+  document.getElementById('eventCreateOverlay').style.display = 'none';
+  pendingEventDate = null;
+}
+
+async function submitEventCreate() {
+  const title = document.getElementById('eventTitle').value.trim();
+  const desc  = document.getElementById('eventDesc').value.trim();
+  if (!title || !pendingEventDate) return;
+  try {
+    const resp = await fetch('/api/group-events', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ title, description: desc, date: pendingEventDate }),
+    });
+    if (resp.ok) {
+      closeEventCreateModal();
+      if (eventMode) toggleEventMode();
+      refreshCalendar();
+      loadUpcomingEvents();
+    }
+  } catch (err) {
+    console.error('Create event error:', err);
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   Event detail modal (with comments)
+   ══════════════════════════════════════════════════════ */
+
+async function showEventDetailModal(eventId) {
+  currentEventId = eventId;
+  try {
+    const resp = await fetch(`/api/group-events/${eventId}`);
+    if (!resp.ok) return;
+    const ev = await resp.json();
+
+    const dateObj = new Date(ev.date + 'T12:00:00');
+    const formatted = dateObj.toLocaleDateString('da-DK', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    });
+    document.getElementById('eventDetailTitle').textContent   = ev.title;
+    document.getElementById('eventDetailDate').textContent    =
+      formatted.charAt(0).toUpperCase() + formatted.slice(1);
+    const descEl = document.getElementById('eventDetailDesc');
+    descEl.textContent    = ev.description || '';
+    descEl.style.display  = ev.description ? '' : 'none';
+    document.getElementById('eventDetailCreator').textContent = `Oprettet af ${ev.creator}`;
+    document.getElementById('eventDetailActions').innerHTML   = ev.is_own
+      ? `<button class="btn btn-sm btn-danger" onclick="deleteGroupEvent(${ev.id})">Slet event</button>`
+      : '';
+
+    renderComments(ev.comments);
+    document.getElementById('commentInput').value = '';
+    document.getElementById('eventDetailOverlay').style.display = 'flex';
+  } catch (err) {
+    console.error('Load event error:', err);
+  }
+}
+
+function closeEventDetailModal() {
+  document.getElementById('eventDetailOverlay').style.display = 'none';
+  currentEventId = null;
+}
+
+function renderComments(comments) {
+  const list = document.getElementById('eventComments');
+  if (comments.length === 0) {
+    list.innerHTML = '<p class="comments-empty">Ingen kommentarer endnu.</p>';
+    return;
+  }
+  list.innerHTML = comments.map(c => `
+    <div class="comment">
+      <span class="comment-dot" style="background:${c.author_color}"></span>
+      <div class="comment-content">
+        <span class="comment-author">${escapeHtml(c.author)}</span>
+        <span class="comment-time">${escapeHtml(c.created_at)}</span>
+        <p class="comment-text">${escapeHtml(c.text)}</p>
       </div>
-    </div>`;
-  container.appendChild(wrap);
-  container.scrollTop = container.scrollHeight;
-  return wrap;
+    </div>
+  `).join('');
+  list.scrollTop = list.scrollHeight;
 }
 
-function removeTypingIndicator(el) {
-  if (el?.parentNode) el.remove();
+async function submitComment() {
+  const input = document.getElementById('commentInput');
+  const text  = input.value.trim();
+  if (!text || !currentEventId) return;
+  input.value = '';
+  try {
+    const resp = await fetch(`/api/group-events/${currentEventId}/comments`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ text }),
+    });
+    if (resp.ok) {
+      const evResp = await fetch(`/api/group-events/${currentEventId}`);
+      if (evResp.ok) renderComments((await evResp.json()).comments);
+    }
+  } catch (err) {
+    console.error('Comment error:', err);
+  }
 }
 
-function setSendDisabled(disabled) {
-  document.getElementById('chatSend').disabled  = disabled;
-  document.getElementById('chatInput').disabled = disabled;
+async function deleteGroupEvent(eventId) {
+  if (!confirm('Slet dette event?')) return;
+  try {
+    const resp = await fetch(`/api/group-events/${eventId}`, { method: 'DELETE' });
+    if (resp.ok) {
+      closeEventDetailModal();
+      refreshCalendar();
+      loadUpcomingEvents();
+    }
+  } catch (err) {
+    console.error('Delete event error:', err);
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   Upcoming events list
+   ══════════════════════════════════════════════════════ */
+
+async function loadUpcomingEvents() {
+  const container = document.getElementById('upcomingEvents');
+  try {
+    const resp   = await fetch('/api/group-events');
+    const events = await resp.json();
+    if (events.length === 0) {
+      container.innerHTML = '<p class="events-empty">Ingen kommende events.</p>';
+      return;
+    }
+    container.innerHTML = events.map(ev => {
+      const dateObj = new Date(ev.date + 'T12:00:00');
+      const formatted = dateObj.toLocaleDateString('da-DK', {
+        day: 'numeric', month: 'short', year: 'numeric',
+      });
+      const commentStr = ev.comment_count > 0
+        ? ` · ${ev.comment_count} kommentar${ev.comment_count !== 1 ? 'er' : ''}`
+        : '';
+      return `
+        <div class="event-item" onclick="showEventDetailModal(${ev.id})">
+          <div class="event-item-date">${escapeHtml(formatted)}</div>
+          <div class="event-item-title">${escapeHtml(ev.title)}</div>
+          ${ev.description
+            ? `<div class="event-item-desc">${escapeHtml(ev.description)}</div>`
+            : ''}
+          <div class="event-item-meta">
+            ${escapeHtml(ev.creator)}${commentStr}
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    console.error('Load upcoming events error:', err);
+    container.innerHTML = '<p class="events-empty">Kunne ikke indlæse events.</p>';
+  }
 }
 
 /* ── Utilities ───────────────────────────────────────── */

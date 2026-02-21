@@ -231,6 +231,31 @@ class UnavailableDate(db.Model):
     )
 
 
+class GroupEvent(db.Model):
+    __tablename__ = 'group_events'
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default='')
+    date = db.Column(db.Date, nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    creator = db.relationship('User', backref='created_events')
+    comments = db.relationship(
+        'EventComment', backref='event', lazy=True,
+        cascade='all, delete-orphan', order_by='EventComment.created_at',
+    )
+
+
+class EventComment(db.Model):
+    __tablename__ = 'event_comments'
+    id = db.Column(db.Integer, primary_key=True)
+    event_id = db.Column(db.Integer, db.ForeignKey('group_events.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    author = db.relationship('User')
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))
@@ -309,6 +334,21 @@ def get_events():
                 },
             })
 
+    # Add group events
+    for e in GroupEvent.query.all():
+        events.append({
+            'id': f"gevent-{e.id}",
+            'title': e.title,
+            'start': e.date.isoformat(),
+            'color': '#7c3aed',
+            'textColor': '#ffffff',
+            'extendedProps': {
+                'isHoliday': False,
+                'isGroupEvent': True,
+                'eventId': e.id,
+            },
+        })
+
     return jsonify(events)
 
 
@@ -375,6 +415,125 @@ def chat():
         'already_exists': already_exists,
         'not_found': not_found,
     })
+
+
+@app.route('/api/unavailable/toggle', methods=['POST'])
+@login_required
+def toggle_unavailable():
+    data = request.get_json()
+    date_str = data.get('date', '')
+    try:
+        d = date.fromisoformat(date_str)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Ugyldig dato'}), 400
+    existing = UnavailableDate.query.filter_by(user_id=current_user.id, date=d).first()
+    if existing:
+        db.session.delete(existing)
+        db.session.commit()
+        return jsonify({'action': 'removed', 'date': date_str})
+    db.session.add(UnavailableDate(user_id=current_user.id, date=d))
+    db.session.commit()
+    return jsonify({'action': 'added', 'date': date_str})
+
+
+@app.route('/api/group-events', methods=['GET'])
+@login_required
+def list_group_events():
+    today = date.today()
+    cutoff = today + timedelta(days=183)
+    events = GroupEvent.query.filter(
+        GroupEvent.date >= today,
+        GroupEvent.date <= cutoff,
+    ).order_by(GroupEvent.date).all()
+    return jsonify([{
+        'id': e.id,
+        'title': e.title,
+        'description': e.description,
+        'date': e.date.isoformat(),
+        'creator': e.creator.username,
+        'created_by': e.created_by,
+        'comment_count': len(e.comments),
+    } for e in events])
+
+
+@app.route('/api/group-events', methods=['POST'])
+@login_required
+def create_group_event():
+    data = request.get_json()
+    title = data.get('title', '').strip()
+    description = data.get('description', '').strip()
+    date_str = data.get('date', '')
+    if not title:
+        return jsonify({'error': 'Titel mangler'}), 400
+    try:
+        d = date.fromisoformat(date_str)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Ugyldig dato'}), 400
+    event = GroupEvent(title=title, description=description, date=d, created_by=current_user.id)
+    db.session.add(event)
+    db.session.commit()
+    return jsonify({'id': event.id, 'title': event.title, 'date': event.date.isoformat()}), 201
+
+
+@app.route('/api/group-events/<int:event_id>', methods=['GET'])
+@login_required
+def get_group_event(event_id):
+    event = db.session.get(GroupEvent, event_id)
+    if not event:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    return jsonify({
+        'id': event.id,
+        'title': event.title,
+        'description': event.description,
+        'date': event.date.isoformat(),
+        'creator': event.creator.username,
+        'created_by': event.created_by,
+        'is_own': event.created_by == current_user.id,
+        'comments': [{
+            'id': c.id,
+            'text': c.text,
+            'author': c.author.username,
+            'author_color': c.author.color,
+            'created_at': c.created_at.strftime('%d. %b %Y %H:%M'),
+            'is_own': c.user_id == current_user.id,
+        } for c in event.comments],
+    })
+
+
+@app.route('/api/group-events/<int:event_id>', methods=['DELETE'])
+@login_required
+def delete_group_event(event_id):
+    event = db.session.get(GroupEvent, event_id)
+    if not event:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    if event.created_by != current_user.id:
+        return jsonify({'error': 'Ikke tilladt'}), 403
+    db.session.delete(event)
+    db.session.commit()
+    return jsonify({'deleted': True})
+
+
+@app.route('/api/group-events/<int:event_id>/comments', methods=['POST'])
+@login_required
+def add_event_comment(event_id):
+    event = db.session.get(GroupEvent, event_id)
+    if not event:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    data = request.get_json()
+    text = data.get('text', '').strip()
+    if not text:
+        return jsonify({'error': 'Kommentar mangler'}), 400
+    comment = EventComment(event_id=event_id, user_id=current_user.id, text=text)
+    db.session.add(comment)
+    db.session.commit()
+    return jsonify({
+        'id': comment.id,
+        'text': comment.text,
+        'author': current_user.username,
+        'author_color': current_user.color,
+        'created_at': comment.created_at.strftime('%d. %b %Y %H:%M'),
+        'is_own': True,
+    }), 201
 
 
 # ── Database seed ──────────────────────────────────────────────────────────────

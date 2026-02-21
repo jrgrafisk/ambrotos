@@ -531,6 +531,243 @@ html, body {
    Responsive
    ══════════════════════════════════════════════════════ */
 
+/* ── Calendar toolbar (event mode) ──────────────────── */
+.calendar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.event-mode-btn.active {
+  background: #7c3aed;
+  color: white;
+  border-color: #7c3aed;
+}
+
+.event-mode-hint {
+  font-size: 13px;
+  color: #7c3aed;
+  font-weight: 500;
+}
+
+#calendar.event-mode-active {
+  outline: 3px solid #7c3aed;
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+#calendar.event-mode-active .fc-daygrid-day,
+#calendar.event-mode-active .fc-timegrid-slot {
+  cursor: crosshair !important;
+}
+
+/* ── Upcoming events card ────────────────────────────── */
+.events-card {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.upcoming-events-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding-right: 2px;
+}
+
+.events-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+}
+
+.event-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.event-item:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+
+.event-item-date {
+  font-size: 11px;
+  font-weight: 700;
+  color: #7c3aed;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+
+.event-item-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.event-item-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.event-item-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ── Wide modal ──────────────────────────────────────── */
+.modal-wide { max-width: 520px; }
+
+/* ── Event detail ────────────────────────────────────── */
+.event-detail-date {
+  font-size: 13px;
+  color: #7c3aed;
+  font-weight: 600;
+  margin-bottom: 6px;
+  text-transform: capitalize;
+}
+
+.event-detail-desc {
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.event-detail-creator {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.event-detail-actions { margin-bottom: 16px; }
+
+/* ── Comments ────────────────────────────────────────── */
+.comments-section {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.comments-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+
+.comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.comments-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 10px 0;
+}
+
+.comment {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.comment-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.comment-content { flex: 1; }
+
+.comment-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.comment-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+
+.comment-text {
+  font-size: 13px;
+  color: var(--text);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.comment-input-area {
+  display: flex;
+  gap: 8px;
+}
+
+.comment-input-area input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.comment-input-area input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+/* Textarea in modals */
+.form-group textarea {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--text);
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.form-group textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+/* ══════════════════════════════════════════════════════
+   Responsive
+   ══════════════════════════════════════════════════════ */
+
 @media (max-width: 768px) {
   .app-layout   { height: auto; overflow: auto; }
   .main-content { flex-direction: column; overflow: visible; }
@@ -543,5 +780,5 @@ html, body {
 
   .calendar-panel { padding: 16px 16px 0; }
 
-  .chat-card { min-height: 380px; }
+  .events-card { min-height: 320px; }
 }
