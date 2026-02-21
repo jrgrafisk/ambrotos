@@ -1,5 +1,5 @@
 {
-  "exported_at": "2026-02-21T20:12:51.458676",
+  "exported_at": "2026-02-21T20:12:53.136106",
   "unavailable_dates": [
     {
       "user_id": 9,
@@ -24,6 +24,10 @@
     {
       "user_id": 8,
       "date": "2026-02-18"
+    },
+    {
+      "user_id": 8,
+      "date": "2026-02-11"
     }
   ],
   "group_events": [],
