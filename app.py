@@ -934,5 +934,3 @@ def admin_update_user(user_id):
     db.session.commit()
     return jsonify({'id': u.id, 'username': u.username, 'color': u.color, 'is_admin': u.is_admin})
 
-
-@app.route('/api
