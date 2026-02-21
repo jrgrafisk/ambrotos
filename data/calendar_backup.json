@@ -1,5 +1,5 @@
 {
-  "exported_at": "2026-02-21T20:14:41.271131",
+  "exported_at": "2026-02-21T20:15:51.306778",
   "unavailable_dates": [
     {
       "user_id": 9,
@@ -50,6 +50,14 @@
       "date": "2026-02-22",
       "created_by": 14,
       "created_at": "2026-02-21T20:14:41.262288"
+    },
+    {
+      "id": 2,
+      "title": "skærtorsdagstons i vandværksforenkningen",
+      "description": "Intet arrangement denne dag",
+      "date": "2026-04-02",
+      "created_by": 14,
+      "created_at": "2026-02-21T20:15:51.299062"
     }
   ],
   "event_comments": []
