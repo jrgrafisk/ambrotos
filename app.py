@@ -288,11 +288,6 @@ def load_user(user_id):
 BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'calendar_backup.json')
 
 
-def is_database_empty():
-    """Tjek om databasen er tom (ingen brugere eller events)."""
-    return User.query.count() == 0 and GroupEvent.query.count() == 0
-
-
 def write_backup():
     """Persist current calendar data to a git-tracked JSON file.
     Called after every write so a redeploy always finds the latest state."""
@@ -390,11 +385,8 @@ def push_backup_to_github():
 
 def restore_from_backup():
     """Populate empty tables from the backup file.
-    Kun hvis databasen er helt tom (f.eks. ved første deploy)."""
+    Runs on startup so a fresh DB after redeploy gets its data back."""
     if not os.path.exists(BACKUP_FILE):
-        return
-    if not is_database_empty():  # Hvis der allerede er data, gør intet
-        print("✓ Databasen indeholder allerede data — ingen gendannelse nødvendig.")
         return
     try:
         with open(BACKUP_FILE, encoding='utf-8') as f:
@@ -412,7 +404,8 @@ def restore_from_backup():
                     ))
             restored_any = True
 
-        id_map = {}
+        # Restore events and build old-id → new-id map for comments
+        id_map: dict[int, int] = {}
         if GroupEvent.query.count() == 0:
             for item in data.get('group_events', []):
                 if item['created_by'] not in valid_user_ids:
@@ -425,7 +418,7 @@ def restore_from_backup():
                     created_at=datetime.fromisoformat(item.get('created_at', datetime.utcnow().isoformat())),
                 )
                 db.session.add(ev)
-                db.session.flush()
+                db.session.flush()       # get auto-assigned id
                 id_map[item['id']] = ev.id
             restored_any = True
 
@@ -445,7 +438,6 @@ def restore_from_backup():
             db.session.commit()
             print(f'✓ Data gendannet fra {BACKUP_FILE}')
     except Exception as exc:
-        db.session.rollback()
         print(f'⚠ Backup restore fejlede: {exc}')
 
 
@@ -934,3 +926,52 @@ def admin_update_user(user_id):
     db.session.commit()
     return jsonify({'id': u.id, 'username': u.username, 'color': u.color, 'is_admin': u.is_admin})
 
+
+@app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
+@login_required
+@admin_required
+def admin_delete_user(user_id):
+    if user_id == current_user.id:
+        return jsonify({'error': 'Du kan ikke slette din egen konto'}), 400
+    u = db.session.get(User, user_id)
+    if not u:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    db.session.delete(u)
+    db.session.commit()
+    write_backup()
+    return jsonify({'deleted': True})
+
+
+# ── Database seed ──────────────────────────────────────────────────────────────
+
+def init_db():
+    with app.app_context():
+        db.create_all()   # only creates tables that don't yet exist
+        password = '123'
+        if User.query.count() == 0:
+            for i, name in enumerate(MEMBER_NAMES):
+                user = User(username=name, color=MEMBER_COLORS[i], is_admin=True)
+                user.set_password(password)
+                db.session.add(user)
+            db.session.commit()
+            print(f"✓ Oprettet {len(MEMBER_NAMES)} brugere (alle er admins)")
+            restore_from_backup()
+        else:
+            db_type = 'PostgreSQL' if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite'
+            print(f"✓ Forbundet til {db_type} — {User.query.count()} brugere, data intakt")
+            restore_from_backup()
+            # Ensure all existing users have admin rights
+            updated = User.query.filter_by(is_admin=False).all()
+            if updated:
+                for u in updated:
+                    u.is_admin = True
+                db.session.commit()
+                print(f"  {len(updated)} bruger(e) opgraderet til admin")
+
+
+# Run on every startup (gunicorn imports this module, so __name__ != '__main__').
+# init_db() is idempotent — safe to call multiple times.
+init_db()
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
