@@ -1,6 +1,10 @@
 import os
 import re
 import json
+import base64
+import threading
+import urllib.request
+import urllib.error
 import calendar as cal_module
 from datetime import datetime, date, timedelta
 
@@ -318,8 +322,65 @@ def write_backup():
         }
         with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        push_backup_to_github()
     except Exception as exc:
         print(f'⚠ Backup write failed: {exc}')
+
+
+def _push_backup_to_github():
+    """Push data/calendar_backup.json to GitHub via Contents API.
+    Runs in a background daemon thread — never blocks a request."""
+    token  = os.environ.get('GITHUB_TOKEN', '')
+    repo   = os.environ.get('GITHUB_REPO', '')
+    branch = os.environ.get('GITHUB_BRANCH', 'main')
+    if not token or not repo:
+        return
+    try:
+        with open(BACKUP_FILE, 'rb') as f:
+            content_b64 = base64.b64encode(f.read()).decode()
+
+        api_url = f'https://api.github.com/repos/{repo}/contents/data/calendar_backup.json'
+        headers = {
+            'Authorization': f'token {token}',
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'ambrotos-app',
+        }
+
+        # Fetch current SHA (required for update; None for first-time create)
+        sha = None
+        get_req = urllib.request.Request(f'{api_url}?ref={branch}', headers=headers)
+        try:
+            with urllib.request.urlopen(get_req, timeout=15) as r:
+                sha = json.loads(r.read()).get('sha')
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+
+        payload: dict = {
+            'message': 'data: opdater kalenderdata [skip ci]',
+            'content': content_b64,
+            'branch':  branch,
+        }
+        if sha:
+            payload['sha'] = sha
+
+        put_req = urllib.request.Request(
+            api_url,
+            data=json.dumps(payload).encode(),
+            headers=headers,
+            method='PUT',
+        )
+        with urllib.request.urlopen(put_req, timeout=15):
+            pass   # 200/201 → success
+    except Exception as exc:
+        print(f'⚠ GitHub push failed: {exc}')
+
+
+def push_backup_to_github():
+    """Non-blocking wrapper — spawns a daemon thread."""
+    if os.environ.get('GITHUB_TOKEN') and os.environ.get('GITHUB_REPO'):
+        threading.Thread(target=_push_backup_to_github, daemon=True).start()
 
 
 def restore_from_backup():

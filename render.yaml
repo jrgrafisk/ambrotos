@@ -23,3 +23,9 @@ services:
         fromDatabase:
           name: ambrotos-db
           property: connectionString
+      - key: GITHUB_TOKEN
+        sync: false          # GitHub PAT med "repo" scope — auto-push af backup-fil
+      - key: GITHUB_REPO
+        value: jrgrafisk/ambrotos
+      - key: GITHUB_BRANCH
+        value: main
