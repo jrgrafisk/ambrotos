@@ -28,4 +28,4 @@ services:
       - key: GITHUB_REPO
         value: jrgrafisk/ambrotos
       - key: GITHUB_BRANCH
-        value: main
+        value: claude/claude-md-mlw9psqur0s0zxtu-CZDVL
