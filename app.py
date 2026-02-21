@@ -13,7 +13,13 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'ambrotos-dev-secret-change-in-production')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///calendar.db'
+
+# Support both PostgreSQL (Render) and SQLite (local dev).
+# Render sets DATABASE_URL with the postgres:// scheme; SQLAlchemy requires postgresql://.
+_db_url = os.environ.get('DATABASE_URL', 'sqlite:///calendar.db')
+if _db_url.startswith('postgres://'):
+    _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -248,6 +254,9 @@ def init_db():
             print(f"✓ Database allerede initialiseret ({User.query.count()} brugere)")
 
 
+# Run on every startup (gunicorn imports this module, so __name__ != '__main__').
+# init_db() is idempotent — safe to call multiple times.
+init_db()
+
 if __name__ == '__main__':
-    init_db()
     app.run(debug=True, host='0.0.0.0', port=5000)
