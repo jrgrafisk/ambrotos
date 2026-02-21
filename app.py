@@ -90,8 +90,24 @@ def calculate_easter(year: int) -> date:
     return date(year, month, day)
 
 
+HOLIDAY_DESCRIPTIONS = {
+    'Nytårsdag':            'Det nye år begynder',
+    'Skærtorsdag':          'Jesu sidste nadver med disciplene',
+    'Langfredag':           'Mindes Jesu korsfæstelse og død',
+    'Påskedag':             'Fejrer Jesu opstandelse fra de døde',
+    '2. påskedag':          'Anden dag af påskefejringen',
+    'Kristi Himmelfartsdag':'Jesus steg op til Himmelen, 39 dage efter påske',
+    'Pinsedag':             'Helligåndens komme over apostlene, 50 dage efter påske',
+    '2. pinsedag':          'Anden dag af pinsefejringen',
+    'Grundlovsdag':         'Grundloven underskrevet 5. juni 1849',
+    'Juleaften':            'Traditionel julefejring og familiemiddag',
+    '1. juledag':           'Fejrer Jesu fødsel',
+    '2. juledag':           'Anden dag af julefejringen',
+}
+
+
 def get_danish_holidays(year: int) -> list:
-    """Return list of (date, name) tuples for Danish public holidays in the given year."""
+    """Return list of (date, name, description) tuples for Danish public holidays."""
     easter = calculate_easter(year)
     holidays = [
         (date(year, 1, 1),               'Nytårsdag'),
@@ -107,7 +123,7 @@ def get_danish_holidays(year: int) -> list:
         (date(year, 12, 25),             '1. juledag'),
         (date(year, 12, 26),             '2. juledag'),
     ]
-    return sorted(holidays, key=lambda x: x[0])
+    return [(d, name, HOLIDAY_DESCRIPTIONS.get(name, '')) for d, name in sorted(holidays, key=lambda x: x[0])]
 
 
 def parse_dates_from_message(message: str) -> list:
@@ -321,7 +337,7 @@ def get_events():
     # Add Danish public holidays for current year ± 1
     today = date.today()
     for year in range(today.year - 1, today.year + 3):
-        for holiday_date, holiday_name in get_danish_holidays(year):
+        for holiday_date, holiday_name, holiday_desc in get_danish_holidays(year):
             events.append({
                 'id': f"holiday-{holiday_date.isoformat()}",
                 'title': holiday_name,
@@ -331,6 +347,7 @@ def get_events():
                 'extendedProps': {
                     'isHoliday': True,
                     'holidayName': holiday_name,
+                    'holidayDescription': holiday_desc,
                 },
             })
 

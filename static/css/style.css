@@ -511,7 +511,13 @@ html, body {
 }
 
 .modal-holiday-icon { font-size: 15px; }
-.modal-holiday-name { flex: 1; }
+.modal-holiday-name { font-weight: 600; }
+.modal-holiday-desc {
+  font-size: 12px;
+  font-weight: 400;
+  color: #922b21;
+  margin-top: 1px;
+}
 
 .modal-empty {
   color: var(--text-muted);
@@ -631,15 +637,31 @@ html, body {
   margin-top: 4px;
 }
 
-/* ── Calendar event initials ─────────────────────────── */
-.event-initials {
-  font-size: 10px;
+/* ── Unavailability circles in day cells ─────────────── */
+.day-unavail-circles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 1px 4px 3px;
+}
+
+.day-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
   font-weight: 700;
   color: white;
-  letter-spacing: 0.02em;
-  display: block;
-  text-align: center;
-  line-height: 1.4;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+.day-avatar-more {
+  background: var(--text-muted);
+  font-size: 7px;
 }
 
 /* ── Avatar circles (attendance + date modal) ────────── */

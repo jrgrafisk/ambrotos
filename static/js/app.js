@@ -41,19 +41,20 @@ function initCalendar() {
     dateClick:  onDateClick,
     dayMaxEvents: 4,
     height: 'auto',
-    eventContent(arg) {
-      const props = arg.event.extendedProps;
-      if (props.isHoliday || props.isGroupEvent) return; // default rendering
-      return { html: `<b class="event-initials">${escapeHtml(getInitials(props.username))}</b>` };
+    eventsSet() {
+      setTimeout(renderUnavailCircles, 0);
+    },
+    datesSet() {
+      document.querySelectorAll('.day-unavail-circles').forEach(el => el.remove());
     },
     eventDidMount(info) {
       const props = info.event.extendedProps;
       if (props.isGroupEvent) {
         info.el.title = info.event.title;
       } else if (props.isHoliday) {
-        info.el.title = props.holidayName;
-      } else {
-        info.el.title = props.username;
+        info.el.title = props.holidayDescription
+          ? `${props.holidayName} — ${props.holidayDescription}`
+          : props.holidayName;
       }
     },
   });
@@ -63,12 +64,52 @@ function initCalendar() {
 async function fetchEvents(fetchInfo, successCallback, failureCallback) {
   try {
     const resp = await fetch('/api/events');
-    allEvents = await resp.json();
-    successCallback(allEvents);
+    const data  = await resp.json();
+    allEvents   = data;
+    // Unavailability events are hidden from FullCalendar's bar rendering;
+    // circles are injected into day cells by renderUnavailCircles().
+    successCallback(data.map(e =>
+      (!e.extendedProps.isHoliday && !e.extendedProps.isGroupEvent)
+        ? { ...e, display: 'none' }
+        : e
+    ));
   } catch (err) {
     console.error('Event fetch error:', err);
     failureCallback(err);
   }
+}
+
+function renderUnavailCircles() {
+  document.querySelectorAll('.day-unavail-circles').forEach(el => el.remove());
+  document.querySelectorAll('.fc-daygrid-day').forEach(cell => {
+    const dateStr = cell.dataset.date;
+    if (!dateStr) return;
+    const unavail = allEvents.filter(e =>
+      e.start === dateStr && !e.extendedProps?.isHoliday && !e.extendedProps?.isGroupEvent
+    );
+    if (!unavail.length) return;
+
+    const container = document.createElement('div');
+    container.className = 'day-unavail-circles';
+    const MAX = 6;
+    unavail.slice(0, MAX).forEach(ev => {
+      const circle = document.createElement('span');
+      circle.className = 'day-avatar day-avatar-user';
+      circle.style.background = ev.color;
+      circle.title = ev.extendedProps.username;
+      circle.textContent = getInitials(ev.extendedProps.username);
+      container.appendChild(circle);
+    });
+    if (unavail.length > MAX) {
+      const more = document.createElement('span');
+      more.className = 'day-avatar day-avatar-more';
+      more.textContent = `+${unavail.length - MAX}`;
+      container.appendChild(more);
+    }
+    const eventsArea = cell.querySelector('.fc-daygrid-day-events');
+    if (eventsArea) eventsArea.prepend(container);
+    else cell.append(container);
+  });
 }
 
 function refreshCalendar() {
@@ -163,7 +204,12 @@ function showDateModal(dateStr) {
     html += holidayEvts.map(ev => `
       <div class="modal-holiday">
         <span class="modal-holiday-icon">🎉</span>
-        <span class="modal-holiday-name">${escapeHtml(ev.extendedProps.holidayName)}</span>
+        <div>
+          <div class="modal-holiday-name">${escapeHtml(ev.extendedProps.holidayName)}</div>
+          ${ev.extendedProps.holidayDescription
+            ? `<div class="modal-holiday-desc">${escapeHtml(ev.extendedProps.holidayDescription)}</div>`
+            : ''}
+        </div>
       </div>
     `).join('');
   }
