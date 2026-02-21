@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+
+{% block title %}Log ind – Ambrotos{% endblock %}
+
+{% block content %}
+<div class="login-wrapper">
+  <div class="login-card">
+    <div class="login-header">
+      <div class="login-logo">📅</div>
+      <h1>Ambrotos</h1>
+      <p>Fælles kalender for holdet</p>
+    </div>
+
+    <form method="POST" action="{{ url_for('login') }}" autocomplete="on">
+      <div class="form-group">
+        <label for="username">Brugernavn</label>
+        <input
+          type="text"
+          id="username"
+          name="username"
+          autofocus
+          required
+          autocomplete="username"
+          placeholder="Dit navn"
+        >
+      </div>
+
+      <div class="form-group">
+        <label for="password">Adgangskode</label>
+        <input
+          type="password"
+          id="password"
+          name="password"
+          required
+          autocomplete="current-password"
+          placeholder="••••••••••••••••"
+        >
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-full">Log ind</button>
+    </form>
+
+    <p class="login-hint">14 brugere · Samme adgangskode for alle</p>
+  </div>
+</div>
+{% endblock %}

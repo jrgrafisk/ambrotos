@@ -1,0 +1,25 @@
+# Environment & secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Database (contains user data — do not commit)
+instance/
+*.db
+*.sqlite3
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

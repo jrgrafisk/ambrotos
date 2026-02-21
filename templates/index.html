@@ -1,0 +1,97 @@
+{% extends 'base.html' %}
+
+{% block title %}Kalender – Ambrotos{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.css">
+{% endblock %}
+
+{% block content %}
+<div class="app-layout">
+
+  <!-- ── Navigation ─────────────────────────────────────────────────── -->
+  <nav class="navbar">
+    <div class="navbar-brand">📅 Ambrotos Kalender</div>
+    <div class="navbar-user">
+      <span class="user-dot" style="background: {{ current_user.color }}"></span>
+      <span class="user-name">{{ current_user.username }}</span>
+      <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline">Log ud</a>
+    </div>
+  </nav>
+
+  <!-- ── Main ───────────────────────────────────────────────────────── -->
+  <div class="main-content">
+
+    <!-- Calendar -->
+    <div class="calendar-panel">
+      <div id="calendar"></div>
+    </div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+
+      <!-- Legend -->
+      <div class="card legend-card">
+        <h3 class="card-title">Medlemmer</h3>
+        <div class="legend-list">
+          {% for user in users %}
+          <div class="legend-item">
+            <span class="legend-dot" style="background: {{ user.color }}"></span>
+            <span class="legend-name {% if user.id == current_user.id %}legend-you{% endif %}">
+              {{ user.username }}{% if user.id == current_user.id %} <em>(dig)</em>{% endif %}
+            </span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- AI Chat -->
+      <div class="card chat-card">
+        <h3 class="card-title">AI Assistent</h3>
+        <p class="chat-hint">
+          Skriv hvilke datoer du <strong>ikke</strong> kan deltage.
+          Skriv <strong>slet [dato]</strong> for at fjerne en dato.
+        </p>
+
+        <div class="chat-messages" id="chatMessages">
+          <div class="chat-message ai">
+            <div class="chat-bubble">
+              Hej {{ current_user.username }}! Fortæl mig hvilke datoer du ikke kan — f.eks.
+              <em>"Jeg kan ikke den 15. og 22. marts"</em> eller
+              <em>"Slet 15. marts"</em>.
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-input-area">
+          <input
+            type="text"
+            id="chatInput"
+            placeholder="Skriv datoer her…"
+            autocomplete="off"
+          >
+          <button id="chatSend" class="btn btn-primary">↑</button>
+        </div>
+      </div>
+
+    </aside>
+  </div>
+</div>
+
+<!-- ── Date detail modal ───────────────────────────────────────────── -->
+<div class="modal-overlay" id="modalOverlay" style="display:none" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modalDate">Dato</h3>
+      <button class="modal-close" id="modalClose" aria-label="Luk">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/locales-all.global.min.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% endblock %}

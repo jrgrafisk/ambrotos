@@ -4,167 +4,143 @@ This file provides guidance for AI assistants (Claude and others) working in thi
 
 ## Project Overview
 
-**Repository**: `jrgrafisk/ambrotos`
+**Ambrotos** is a shared team calendar web application built with Python/Flask and powered by the Claude AI API. Team members log in and mark dates when they are unavailable. An AI chat interface accepts natural-language Danish input and automatically updates the calendar.
 
-> This repository is in initial setup. Update this section as the project takes shape, describing its purpose, core functionality, and target users.
+**Key features:**
+- 14 pre-created users, all sharing the password `kodeordetersvært`
+- Monthly/weekly calendar view showing each member's unavailable dates (color-coded per user)
+- AI chat powered by `claude-opus-4-6` that parses Danish date expressions and adds/removes dates
+- Click any calendar date or event to see who is unavailable; add/delete your own dates directly from the modal
+- Delete a date by typing `slet <dato>` in the chat
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.11+, Flask 3, Flask-SQLAlchemy, Flask-Login |
+| Database | SQLite (file: `instance/calendar.db`) |
+| AI | Anthropic Python SDK (`claude-opus-4-6`) |
+| Frontend | Vanilla JS, FullCalendar v6 (CDN), custom CSS |
+| Auth | Werkzeug password hashing |
 
 ## Repository Structure
 
-> Document the directory layout here as the project grows. Example:
->
-> ```
-> ambrotos/
-> ├── src/           # Main source code
-> ├── tests/         # Test suites
-> ├── docs/          # Documentation
-> └── scripts/       # Build and utility scripts
-> ```
+```
+ambrotos/
+├── app.py               # Flask application, routes, DB models, AI chat endpoint
+├── requirements.txt     # Python dependencies
+├── .env.example         # Required environment variables (copy to .env)
+├── .gitignore
+├── CLAUDE.md
+├── templates/
+│   ├── base.html        # HTML shell (head, flash messages, script block)
+│   ├── login.html       # Login form
+│   └── index.html       # Main page (calendar + sidebar with legend + chat)
+└── static/
+    ├── css/style.css    # All styles — variables, layout, components
+    └── js/app.js        # FullCalendar init, chat logic, modal, API calls
+```
 
 ## Development Setup
 
-> Add setup instructions here. Include prerequisites, installation steps, and environment configuration.
-
 ### Prerequisites
-
-- List required tools and runtimes
-- List required environment variables
+- Python 3.11+
+- An Anthropic API key (get one at https://console.anthropic.com)
 
 ### Installation
 
 ```bash
-# Example — replace with actual steps
-git clone <repo-url>
+# Clone and enter the repo
 cd ambrotos
-# install dependencies
+
+# Create a virtual environment
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env and set ANTHROPIC_API_KEY=<your key>
+
+# Run the app (creates DB and seeds 14 users on first start)
+python app.py
 ```
 
-### Environment Variables
+Open http://localhost:5000 in your browser. Log in with any of the 14 usernames (e.g. `Anders`) and password `kodeordetersvært`.
 
-Document required environment variables in `.env.example` and list critical ones here.
+### Users
 
-## Build and Run
+The 14 pre-seeded users are:
+`Anders`, `Birthe`, `Christian`, `Dorte`, `Erik`, `Freja`, `Gunnar`, `Helle`, `Ivan`, `Jette`, `Klaus`, `Lene`, `Mikkel`, `Nina`
 
-> Replace with actual commands once the build system is established.
+Password for all: `kodeordetersvært`
 
-```bash
-# Build
-# Run
-# Start dev server
-```
+## Key Files and Conventions
 
-## Testing
+### `app.py`
 
-> Document the test framework, how to run tests, and what coverage targets exist.
+- **Models**: `User` (id, username, password_hash, color) and `UnavailableDate` (user_id, date). A unique constraint prevents duplicate entries per user/date.
+- **`init_db()`**: Called on startup; creates tables and seeds users if the DB is empty.
+- **`GET /api/events`**: Returns all unavailable dates as FullCalendar-compatible event objects.
+- **`POST /api/chat`**: Accepts `{ message: string }`, calls Claude, parses JSON response, writes to DB. Returns `{ response, added, deleted, already_exists, not_found }`.
+- The Claude system prompt instructs the model to return **only valid JSON** — no markdown, no prose. The endpoint strips ` ``` ` fences defensively.
+- Model used: `claude-opus-4-6` (no thinking, 1024 max tokens — date parsing is a simple structured extraction task).
 
-```bash
-# Run all tests
-# Run a specific test
-# Run with coverage
-```
+### `static/js/app.js`
 
-### Test Conventions
+- **`initCalendar()`**: Sets up FullCalendar with Danish locale, fetches events via `fetchEvents()`, caches them in `allEvents`.
+- **`showDateModal(dateStr)`**: Filters `allEvents` locally (no extra API call) to show who is unavailable on a given date. Provides delete/add buttons for the current user.
+- **`sendChatMessage(text)`**: POSTs to `/api/chat`, shows typing indicator, displays AI response as a chat bubble, calls `refreshCalendar()` if any dates changed.
+- All user-provided strings run through `escapeHtml()` before insertion into the DOM.
 
-- Tests live adjacent to source files or in a top-level `tests/` directory (decide and document this)
-- Test file naming convention: `*.test.<ext>` or `*_test.<ext>` (choose one)
-- All new features require corresponding tests
-- Do not commit with failing tests
+### `static/css/style.css`
 
-## Code Style and Conventions
+Uses CSS custom properties (`--primary`, `--bg`, `--card`, etc.) defined in `:root`. Mobile-responsive at 768px breakpoint — the sidebar stacks below the calendar on narrow screens.
 
-> Fill in language-specific conventions once the tech stack is decided.
+## Environment Variables
 
-### General
-
-- Keep functions small and focused; prefer composition over deep nesting
-- Prefer explicit over implicit; avoid magic values — use named constants
-- Write self-documenting code; add comments only where logic is non-obvious
-- Delete dead code rather than commenting it out
-
-### Naming
-
-- Use descriptive names; avoid abbreviations except well-known ones (`id`, `url`, `ctx`)
-- Consistent casing per language conventions (e.g., `snake_case` for Python, `camelCase` for JS/TS)
-
-### Error Handling
-
-- Handle errors explicitly; do not swallow exceptions silently
-- Validate at system boundaries (user input, external APIs); trust internal code
+| Variable | Required | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | **Yes** | Anthropic API key |
+| `SECRET_KEY` | No | Flask session secret (use a long random string in production) |
 
 ## Git Workflow
 
 ### Branches
-
-- `main` — stable, production-ready code; protected
+- `main` — stable code
 - `claude/<description>-<session-id>` — AI-assisted feature branches
-- Feature branches: `feat/<short-description>`
-- Bug fixes: `fix/<short-description>`
 
 ### Commit Messages
-
-Use the imperative mood and keep the subject line under 72 characters:
-
 ```
-<type>: <short summary>
-
-[Optional body explaining the why, not the what]
+feat: add weekly view toggle to calendar
+fix: prevent duplicate date insertion in chat handler
+chore: update CLAUDE.md with user list
 ```
 
-Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `build`, `ci`
+## Testing
 
-Examples:
-```
-feat: add user authentication middleware
-fix: prevent null pointer in session handler
-docs: update setup instructions in CLAUDE.md
-```
+No automated test suite yet. Manual testing checklist:
 
-### Pull Requests
-
-- Keep PRs small and focused on a single concern
-- Include a description of what changed and why
-- Link related issues
-- All CI checks must pass before merging
-
-## CI/CD
-
-> Document pipelines here once configured (GitHub Actions, CircleCI, etc.).
-
-Expected checks per PR:
-- Lint
-- Type check (if applicable)
-- Tests
-- Build
-
-## Security
-
-- Never commit secrets, credentials, or API keys — use environment variables
-- Add sensitive file patterns to `.gitignore`
-- Validate and sanitize all external input
-- Keep dependencies up to date; audit regularly
-
-## Dependencies
-
-> List critical dependencies and their purpose here once the project has them. For each:
-> - What it does
-> - Why it was chosen over alternatives
-> - Any important configuration or usage notes
-
-## Adding New Features
-
-1. Create a feature branch from `main`
-2. Write tests first (or alongside the implementation)
-3. Implement the feature following existing conventions
-4. Ensure all tests pass and linting is clean
-5. Open a PR with a clear description
+- [ ] Log in as each of several users, add different dates, verify calendar shows all entries with correct colors
+- [ ] Type date expressions in various Danish formats: `"15. marts"`, `"d. 5/4"`, `"fra 1. til 3. juni"`, `"alle mandage i maj"`
+- [ ] Delete a date via chat (`slet 15. marts`) and via the modal Slet button
+- [ ] Click a date with multiple unavailable members — verify modal lists all
+- [ ] Click a date you have no entry for — verify "Markér mig" button appears and works
+- [ ] Resize browser to < 768px — verify sidebar stacks below calendar
 
 ## Common Pitfalls
 
-> Document gotchas, non-obvious behaviors, or past mistakes here as the project evolves.
+- **DB path**: Flask-SQLAlchemy with SQLite creates the file in an `instance/` subdirectory by default when using `sqlite:///filename.db`. This directory is git-ignored.
+- **Special characters in password**: `kodeordetersvært` contains `æ`. Werkzeug's `generate_password_hash` / `check_password_hash` handle UTF-8 correctly; no issues expected.
+- **Claude JSON output**: On rare occasions the model may wrap its response in markdown code fences. `app.py` strips these defensively. If the model refuses or returns non-JSON, the chat endpoint falls back to a Danish error message.
+- **FullCalendar locale**: The Danish locale is loaded via the `locales-all.global.min.js` CDN bundle. If offline, the calendar falls back to English.
 
 ## Updating This File
 
-Keep CLAUDE.md current as the project evolves:
-- When the tech stack is chosen, fill in build/test/lint commands
-- When directory structure stabilizes, document it
-- When new conventions are adopted, record them here
-- When gotchas are discovered, add them to Common Pitfalls
+Keep CLAUDE.md current when:
+- New routes or models are added to `app.py`
+- The Claude model or prompt changes
+- New environment variables are introduced
+- Significant UI or workflow changes are made
