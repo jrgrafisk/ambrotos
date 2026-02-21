@@ -23,9 +23,11 @@ services:
         fromDatabase:
           name: ambrotos-db
           property: connectionString
-      - key: GITHUB_TOKEN
-        sync: false          # GitHub PAT med "repo" scope — auto-push af backup-fil
-      - key: GITHUB_REPO
-        value: jrgrafisk/ambrotos
-      - key: GITHUB_BRANCH
-        value: claude/claude-md-mlw9psqur0s0zxtu-CZDVL
+      - key: FTP_HOST
+        value: ftp.jrgrafisk.dk
+      - key: FTP_USER
+        sync: false          # FTP-brugernavn — sæt manuelt i Render dashboard
+      - key: FTP_PASS
+        sync: false          # FTP-adgangskode — sæt manuelt i Render dashboard
+      - key: FTP_PATH
+        value: /ambrotos

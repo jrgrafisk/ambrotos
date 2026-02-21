@@ -1,10 +1,9 @@
 import os
 import re
 import json
-import base64
+import ftplib
+import io
 import threading
-import urllib.request
-import urllib.error
 import calendar as cal_module
 from datetime import datetime, date, timedelta
 
@@ -322,70 +321,82 @@ def write_backup():
         }
         with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        push_backup_to_github()
+        push_backup_to_ftp()
     except Exception as exc:
         print(f'⚠ Backup write failed: {exc}')
 
 
-def _push_backup_to_github():
-    """Push data/calendar_backup.json to GitHub via Contents API.
+def _ftp_ensure_dir(ftp, path):
+    """Navigate into the given directory on the FTP server, creating it if needed."""
+    dirs = [d for d in path.strip('/').split('/') if d]
+    for d in dirs:
+        try:
+            ftp.cwd(d)
+        except ftplib.error_perm:
+            ftp.mkd(d)
+            ftp.cwd(d)
+
+
+def _push_backup_to_ftp():
+    """Upload data/calendar_backup.json to FTP server.
     Runs in a background daemon thread — never blocks a request."""
-    token  = os.environ.get('GITHUB_TOKEN', '')
-    repo   = os.environ.get('GITHUB_REPO', '')
-    branch = os.environ.get('GITHUB_BRANCH', 'main')
-    if not token or not repo:
+    host = os.environ.get('FTP_HOST', '')
+    user = os.environ.get('FTP_USER', '')
+    passwd = os.environ.get('FTP_PASS', '')
+    remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
+    if not host or not user or not passwd:
         return
     try:
         with open(BACKUP_FILE, 'rb') as f:
-            content_b64 = base64.b64encode(f.read()).decode()
+            file_data = f.read()
 
-        api_url = f'https://api.github.com/repos/{repo}/contents/data/calendar_backup.json'
-        headers = {
-            'Authorization': f'token {token}',
-            'Accept': 'application/vnd.github.v3+json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'ambrotos-app',
-        }
+        ftp = ftplib.FTP_TLS(host, timeout=30)
+        ftp.login(user, passwd)
+        ftp.prot_p()  # Secure data connection
 
-        # Fetch current SHA (required for update; None for first-time create)
-        sha = None
-        get_req = urllib.request.Request(f'{api_url}?ref={branch}', headers=headers)
-        try:
-            with urllib.request.urlopen(get_req, timeout=15) as r:
-                sha = json.loads(r.read()).get('sha')
-        except urllib.error.HTTPError as e:
-            if e.code != 404:
-                raise
-
-        payload: dict = {
-            'message': 'data: opdater kalenderdata [skip ci]',
-            'content': content_b64,
-            'branch':  branch,
-        }
-        if sha:
-            payload['sha'] = sha
-
-        put_req = urllib.request.Request(
-            api_url,
-            data=json.dumps(payload).encode(),
-            headers=headers,
-            method='PUT',
-        )
-        with urllib.request.urlopen(put_req, timeout=15):
-            pass   # 200/201 → success
+        _ftp_ensure_dir(ftp, remote_dir)
+        ftp.storbinary('STOR calendar_backup.json', io.BytesIO(file_data))
+        ftp.quit()
     except Exception as exc:
-        print(f'⚠ GitHub push failed: {exc}')
+        print(f'⚠ FTP upload failed: {exc}')
 
 
-def push_backup_to_github():
+def push_backup_to_ftp():
     """Non-blocking wrapper — spawns a daemon thread."""
-    if os.environ.get('GITHUB_TOKEN') and os.environ.get('GITHUB_REPO'):
-        threading.Thread(target=_push_backup_to_github, daemon=True).start()
+    if os.environ.get('FTP_HOST') and os.environ.get('FTP_USER') and os.environ.get('FTP_PASS'):
+        threading.Thread(target=_push_backup_to_ftp, daemon=True).start()
+
+
+def _download_backup_from_ftp():
+    """Download calendar_backup.json from FTP server into local data/ directory.
+    Called once at startup if no local backup file exists."""
+    host = os.environ.get('FTP_HOST', '')
+    user = os.environ.get('FTP_USER', '')
+    passwd = os.environ.get('FTP_PASS', '')
+    remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
+    if not host or not user or not passwd:
+        return
+    try:
+        ftp = ftplib.FTP_TLS(host, timeout=30)
+        ftp.login(user, passwd)
+        ftp.prot_p()
+        ftp.cwd(remote_dir)
+
+        os.makedirs(os.path.dirname(BACKUP_FILE), exist_ok=True)
+        with open(BACKUP_FILE, 'wb') as f:
+            ftp.retrbinary('RETR calendar_backup.json', f.write)
+        ftp.quit()
+        print(f'✓ Backup hentet fra FTP ({host}{remote_dir}/calendar_backup.json)')
+    except Exception as exc:
+        print(f'⚠ FTP download fejlede (kan forventes ved helt ny opsætning): {exc}')
 
 
 def restore_from_backup():
     """Populate empty tables from the backup file.
-    Runs on startup so a fresh DB after redeploy gets its data back."""
+    Runs on startup so a fresh DB after redeploy gets its data back.
+    Downloads from FTP first if no local file exists."""
+    if not os.path.exists(BACKUP_FILE):
+        _download_backup_from_ftp()
     if not os.path.exists(BACKUP_FILE):
         return
     try:
@@ -694,6 +705,9 @@ def chat():
                 added.append(d.isoformat())
 
     db.session.commit()
+
+    if added or deleted:
+        write_backup()
 
     if is_delete:
         if deleted:

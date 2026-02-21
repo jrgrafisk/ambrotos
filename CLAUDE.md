@@ -105,6 +105,10 @@ Uses CSS custom properties (`--primary`, `--bg`, `--card`, etc.) defined in `:ro
 |---|---|---|
 | `ANTHROPIC_API_KEY` | **Yes** | Anthropic API key |
 | `SECRET_KEY` | No | Flask session secret (use a long random string in production) |
+| `FTP_HOST` | No | FTP server hostname (e.g., `ftp.jrgrafisk.dk`) |
+| `FTP_USER` | No | FTP username |
+| `FTP_PASS` | No | FTP password |
+| `FTP_PATH` | No | Remote directory for backup (default: `/ambrotos`) |
 
 ## Git Workflow
 
