@@ -39,7 +39,8 @@ function initCalendar() {
     dayMaxEvents: 4,
     height: 'auto',
     eventDidMount(info) {
-      info.el.title = info.event.extendedProps.username;
+      const props = info.event.extendedProps;
+      info.el.title = props.isHoliday ? props.holidayName : props.username;
     },
   });
   calendar.render();
@@ -99,12 +100,25 @@ function showDateModal(dateStr) {
 
   /* Filter cached events for this date */
   const dayEvents = allEvents.filter(e => e.start === dateStr);
+  const holidayEvents = dayEvents.filter(e => e.extendedProps.isHoliday);
+  const userEvents = dayEvents.filter(e => !e.extendedProps.isHoliday);
   const body = document.getElementById('modalBody');
 
-  if (dayEvents.length === 0) {
-    body.innerHTML = '<p class="modal-empty">Ingen er utilgængelige denne dag.</p>';
+  let html = '';
+
+  if (holidayEvents.length > 0) {
+    html += holidayEvents.map(ev => `
+      <div class="modal-holiday">
+        <span class="modal-holiday-icon">🎉</span>
+        <span class="modal-holiday-name">${escapeHtml(ev.extendedProps.holidayName)}</span>
+      </div>
+    `).join('');
+  }
+
+  if (userEvents.length === 0) {
+    html += '<p class="modal-empty">Ingen er utilgængelige denne dag.</p>';
   } else {
-    body.innerHTML = dayEvents.map(ev => `
+    html += userEvents.map(ev => `
       <div class="modal-member">
         <span class="modal-dot" style="background:${ev.color}"></span>
         <span class="modal-member-name">
@@ -118,8 +132,10 @@ function showDateModal(dateStr) {
     `).join('');
   }
 
+  body.innerHTML = html;
+
   /* Actions for the current user */
-  const hasOwn = dayEvents.some(e => e.extendedProps.isOwn);
+  const hasOwn = userEvents.some(e => e.extendedProps.isOwn);
   const actions = document.createElement('div');
   actions.className = 'modal-actions';
 

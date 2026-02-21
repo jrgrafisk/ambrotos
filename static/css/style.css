@@ -499,6 +499,20 @@ html, body {
 .modal-member-name { flex: 1; }
 .modal-member-you  { color: var(--text-muted); font-size: 12px; margin-left: 4px; }
 
+.modal-holiday {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+  color: #c0392b;
+}
+
+.modal-holiday-icon { font-size: 15px; }
+.modal-holiday-name { flex: 1; }
+
 .modal-empty {
   color: var(--text-muted);
   font-size: 14px;

@@ -71,6 +71,45 @@ DANISH_WEEKDAYS = {
 }
 
 
+def calculate_easter(year: int) -> date:
+    """Calculate Easter Sunday using the Meeus/Jones/Butcher algorithm."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+
+def get_danish_holidays(year: int) -> list:
+    """Return list of (date, name) tuples for Danish public holidays in the given year."""
+    easter = calculate_easter(year)
+    holidays = [
+        (date(year, 1, 1),               'Nytårsdag'),
+        (easter - timedelta(days=3),      'Skærtorsdag'),
+        (easter - timedelta(days=2),      'Langfredag'),
+        (easter,                          'Påskedag'),
+        (easter + timedelta(days=1),      '2. påskedag'),
+        (easter + timedelta(days=39),     'Kristi Himmelfartsdag'),
+        (easter + timedelta(days=49),     'Pinsedag'),
+        (easter + timedelta(days=50),     '2. pinsedag'),
+        (date(year, 6, 5),               'Grundlovsdag'),
+        (date(year, 12, 24),             'Juleaften'),
+        (date(year, 12, 25),             '1. juledag'),
+        (date(year, 12, 26),             '2. juledag'),
+    ]
+    return sorted(holidays, key=lambda x: x[0])
+
+
 def parse_dates_from_message(message: str) -> list:
     """Extract date objects from a Danish natural-language message."""
     today = date.today()
@@ -250,8 +289,26 @@ def get_events():
                 'userId': d.user_id,
                 'username': d.user.username,
                 'isOwn': d.user_id == current_user.id,
+                'isHoliday': False,
             },
         })
+
+    # Add Danish public holidays for current year ± 1
+    today = date.today()
+    for year in range(today.year - 1, today.year + 3):
+        for holiday_date, holiday_name in get_danish_holidays(year):
+            events.append({
+                'id': f"holiday-{holiday_date.isoformat()}",
+                'title': holiday_name,
+                'start': holiday_date.isoformat(),
+                'color': '#c0392b',
+                'textColor': '#ffffff',
+                'extendedProps': {
+                    'isHoliday': True,
+                    'holidayName': holiday_name,
+                },
+            })
+
     return jsonify(events)
 
 
@@ -325,8 +382,8 @@ def chat():
 def init_db():
     with app.app_context():
         db.create_all()
+        password = '123'
         if User.query.count() == 0:
-            password = 'kodeordetersvært'
             for i, name in enumerate(MEMBER_NAMES):
                 user = User(username=name, color=MEMBER_COLORS[i])
                 user.set_password(password)
@@ -335,7 +392,11 @@ def init_db():
             print(f"✓ Oprettet {len(MEMBER_NAMES)} brugere")
             print(f"  Adgangskode for alle: '{password}'")
         else:
+            for user in User.query.all():
+                user.set_password(password)
+            db.session.commit()
             print(f"✓ Database allerede initialiseret ({User.query.count()} brugere)")
+            print(f"  Adgangskode opdateret til: '{password}'")
 
 
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').
