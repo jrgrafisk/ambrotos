@@ -29,7 +29,7 @@ function initCalendar() {
     headerToolbar: {
       left:   'prev,next today',
       center: 'title',
-      right:  'dayGridMonth,dayGridThreeMonth,dayGridYear,dayGridWeek',
+      right:  'dayGridMonth,dayGridThreeMonth,dayGridYear',
     },
     views: {
       dayGridThreeMonth: {
@@ -40,12 +40,12 @@ function initCalendar() {
       dayGridYear: {
         type: 'dayGrid',
         duration: { months: 12 },
-        buttonText: 'År',
+        buttonText: '12 måneder',
       },
     },
     buttonText: {
       today: 'I dag',
-      month: 'Måned',
+      month: '1 måned',
       week:  'Uge',
     },
     events: fetchEvents,
