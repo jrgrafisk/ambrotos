@@ -1,5 +1,5 @@
 {
-  "exported_at": "2026-02-21T23:10:37.666641",
+  "exported_at": "2026-02-21T23:10:56.336752",
   "unavailable_dates": [
     {
       "user_id": 9,
@@ -86,6 +86,12 @@
       "user_id": 8,
       "text": "Heste Per",
       "created_at": "2026-02-21T22:15:24.329539"
+    },
+    {
+      "event_id": 2,
+      "user_id": 8,
+      "text": "jeg glæder mig",
+      "created_at": "2026-02-21T23:10:56.328465"
     }
   ]
 }
