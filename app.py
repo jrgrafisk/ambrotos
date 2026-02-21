@@ -30,15 +30,15 @@ login_manager.login_view = 'login'
 login_manager.login_message = 'Log venligst ind for at fortsætte.'
 
 MEMBER_NAMES = [
-    'Anders', 'Birthe', 'Christian', 'Dorte', 'Erik',
-    'Freja', 'Gunnar', 'Helle', 'Ivan', 'Jette',
-    'Klaus', 'Lene', 'Mikkel', 'Nina',
+    'Anders Badsberg', 'Rasmus Bjerg', 'Mikael', 'Martin Bach',
+    'Anders Busch', 'Kristian', 'Rasmus Borup', 'Kasper',
+    'Bjarne', 'Jakob', 'Mikkel', 'Johan', 'Martin Kjær',
 ]
 
 MEMBER_COLORS = [
     '#e53935', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa',
     '#00acc1', '#f4511e', '#3949ab', '#00897b', '#c0ca33',
-    '#ffb300', '#d81b60', '#6d4c41', '#546e7a',
+    '#ffb300', '#d81b60', '#6d4c41',
 ]
 
 
@@ -392,10 +392,16 @@ def init_db():
             print(f"✓ Oprettet {len(MEMBER_NAMES)} brugere")
             print(f"  Adgangskode for alle: '{password}'")
         else:
-            for user in User.query.all():
-                user.set_password(password)
+            existing = User.query.order_by(User.id).all()
+            for i, user in enumerate(existing):
+                if i < len(MEMBER_NAMES):
+                    user.username = MEMBER_NAMES[i]
+                    user.color = MEMBER_COLORS[i]
+                    user.set_password(password)
+                else:
+                    db.session.delete(user)
             db.session.commit()
-            print(f"✓ Database allerede initialiseret ({User.query.count()} brugere)")
+            print(f"✓ Brugere opdateret ({min(len(existing), len(MEMBER_NAMES))} brugere)")
             print(f"  Adgangskode opdateret til: '{password}'")
 
 
