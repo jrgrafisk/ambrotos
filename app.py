@@ -481,6 +481,10 @@ def get_group_event(event_id):
     event = db.session.get(GroupEvent, event_id)
     if not event:
         return jsonify({'error': 'Ikke fundet'}), 404
+    unavailable_ids = {
+        ud.user_id for ud in UnavailableDate.query.filter_by(date=event.date).all()
+    }
+    all_users = User.query.order_by(User.id).all()
     return jsonify({
         'id': event.id,
         'title': event.title,
@@ -489,6 +493,14 @@ def get_group_event(event_id):
         'creator': event.creator.username,
         'created_by': event.created_by,
         'is_own': event.created_by == current_user.id,
+        'attending': [
+            {'id': u.id, 'username': u.username, 'color': u.color}
+            for u in all_users if u.id not in unavailable_ids
+        ],
+        'not_attending': [
+            {'id': u.id, 'username': u.username, 'color': u.color}
+            for u in all_users if u.id in unavailable_ids
+        ],
         'comments': [{
             'id': c.id,
             'text': c.text,

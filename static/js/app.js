@@ -41,6 +41,11 @@ function initCalendar() {
     dateClick:  onDateClick,
     dayMaxEvents: 4,
     height: 'auto',
+    eventContent(arg) {
+      const props = arg.event.extendedProps;
+      if (props.isHoliday || props.isGroupEvent) return; // default rendering
+      return { html: `<b class="event-initials">${escapeHtml(getInitials(props.username))}</b>` };
+    },
     eventDidMount(info) {
       const props = info.event.extendedProps;
       if (props.isGroupEvent) {
@@ -285,6 +290,7 @@ async function showEventDetailModal(eventId) {
       ? `<button class="btn btn-sm btn-danger" onclick="deleteGroupEvent(${ev.id})">Slet event</button>`
       : '';
 
+    renderAttendance(ev.attending, ev.not_attending);
     renderComments(ev.comments);
     document.getElementById('commentInput').value = '';
     document.getElementById('eventDetailOverlay').style.display = 'flex';
@@ -296,6 +302,24 @@ async function showEventDetailModal(eventId) {
 function closeEventDetailModal() {
   document.getElementById('eventDetailOverlay').style.display = 'none';
   currentEventId = null;
+}
+
+function renderAttendance(attending, notAttending) {
+  const section = document.getElementById('eventAttendance');
+  const avatarHtml = (users) => users.map(u =>
+    `<div class="avatar" style="background:${u.color}" title="${escapeHtml(u.username)}">${escapeHtml(getInitials(u.username))}</div>`
+  ).join('');
+
+  section.innerHTML = `
+    <div class="attendance-row">
+      <span class="attendance-label attending">Kan deltage (${attending.length})</span>
+      <div class="attendance-avatars">${attending.length ? avatarHtml(attending) : '<span class="attendance-none">—</span>'}</div>
+    </div>
+    <div class="attendance-row">
+      <span class="attendance-label not-attending">Kan ikke (${notAttending.length})</span>
+      <div class="attendance-avatars">${notAttending.length ? avatarHtml(notAttending) : '<span class="attendance-none">—</span>'}</div>
+    </div>
+  `;
 }
 
 function renderComments(comments) {
@@ -392,6 +416,10 @@ async function loadUpcomingEvents() {
 }
 
 /* ── Utilities ───────────────────────────────────────── */
+
+function getInitials(name) {
+  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+}
 
 function escapeHtml(str) {
   const div = document.createElement('div');

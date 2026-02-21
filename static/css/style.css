@@ -631,6 +631,79 @@ html, body {
   margin-top: 4px;
 }
 
+/* ── Calendar event initials ─────────────────────────── */
+.event-initials {
+  font-size: 10px;
+  font-weight: 700;
+  color: white;
+  letter-spacing: 0.02em;
+  display: block;
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* ── Avatar circles (attendance + date modal) ────────── */
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: white;
+  flex-shrink: 0;
+  cursor: default;
+  border: 2px solid white;
+  margin-left: -4px;
+  transition: transform 0.1s;
+}
+
+.avatar:first-child { margin-left: 0; }
+.avatar:hover { transform: scale(1.15); z-index: 1; }
+
+/* ── Attendance section in event detail ──────────────── */
+.attendance-section {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.attendance-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.attendance-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  min-width: 100px;
+}
+
+.attendance-label.attending    { color: #16a34a; }
+.attendance-label.not-attending { color: var(--danger); }
+
+.attendance-avatars {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+}
+
+.attendance-none {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 /* ── Wide modal ──────────────────────────────────────── */
 .modal-wide { max-width: 520px; }
 
