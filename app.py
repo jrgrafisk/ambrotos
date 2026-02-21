@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import calendar as cal_module
 from datetime import datetime, date, timedelta
 
@@ -224,7 +225,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     color = db.Column(db.String(7), nullable=False, default='#1e88e5')
-    is_admin = db.Column(db.Boolean, nullable=False, default=False)
+    is_admin = db.Column(db.Boolean, nullable=False, default=True)
     unavailable_dates = db.relationship(
         'UnavailableDate', backref='user', lazy=True, cascade='all, delete-orphan'
     )
@@ -276,6 +277,182 @@ class EventComment(db.Model):
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))
+
+
+# ── Data backup / restore / ICS ────────────────────────────────────────────────
+
+BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'calendar_backup.json')
+
+
+def write_backup():
+    """Persist current calendar data to a git-tracked JSON file.
+    Called after every write so a redeploy always finds the latest state."""
+    try:
+        os.makedirs(os.path.dirname(BACKUP_FILE), exist_ok=True)
+        payload = {
+            'exported_at': datetime.utcnow().isoformat(),
+            'unavailable_dates': [
+                {'user_id': ud.user_id, 'date': ud.date.isoformat()}
+                for ud in UnavailableDate.query.all()
+            ],
+            'group_events': [
+                {
+                    'id': e.id,
+                    'title': e.title,
+                    'description': e.description or '',
+                    'date': e.date.isoformat(),
+                    'created_by': e.created_by,
+                    'created_at': e.created_at.isoformat(),
+                }
+                for e in GroupEvent.query.order_by(GroupEvent.id).all()
+            ],
+            'event_comments': [
+                {
+                    'event_id': c.event_id,
+                    'user_id': c.user_id,
+                    'text': c.text,
+                    'created_at': c.created_at.isoformat(),
+                }
+                for c in EventComment.query.order_by(EventComment.id).all()
+            ],
+        }
+        with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        print(f'⚠ Backup write failed: {exc}')
+
+
+def restore_from_backup():
+    """Populate empty tables from the backup file.
+    Runs on startup so a fresh DB after redeploy gets its data back."""
+    if not os.path.exists(BACKUP_FILE):
+        return
+    try:
+        with open(BACKUP_FILE, encoding='utf-8') as f:
+            data = json.load(f)
+
+        valid_user_ids = {u.id for u in User.query.all()}
+        restored_any = False
+
+        if UnavailableDate.query.count() == 0:
+            for item in data.get('unavailable_dates', []):
+                if item['user_id'] in valid_user_ids:
+                    db.session.add(UnavailableDate(
+                        user_id=item['user_id'],
+                        date=date.fromisoformat(item['date']),
+                    ))
+            restored_any = True
+
+        # Restore events and build old-id → new-id map for comments
+        id_map: dict[int, int] = {}
+        if GroupEvent.query.count() == 0:
+            for item in data.get('group_events', []):
+                if item['created_by'] not in valid_user_ids:
+                    continue
+                ev = GroupEvent(
+                    title=item['title'],
+                    description=item.get('description', ''),
+                    date=date.fromisoformat(item['date']),
+                    created_by=item['created_by'],
+                    created_at=datetime.fromisoformat(item.get('created_at', datetime.utcnow().isoformat())),
+                )
+                db.session.add(ev)
+                db.session.flush()       # get auto-assigned id
+                id_map[item['id']] = ev.id
+            restored_any = True
+
+        if EventComment.query.count() == 0 and id_map:
+            for item in data.get('event_comments', []):
+                new_eid = id_map.get(item['event_id'])
+                if new_eid and item['user_id'] in valid_user_ids:
+                    db.session.add(EventComment(
+                        event_id=new_eid,
+                        user_id=item['user_id'],
+                        text=item['text'],
+                        created_at=datetime.fromisoformat(item.get('created_at', datetime.utcnow().isoformat())),
+                    ))
+            restored_any = True
+
+        if restored_any:
+            db.session.commit()
+            print(f'✓ Data gendannet fra {BACKUP_FILE}')
+    except Exception as exc:
+        print(f'⚠ Backup restore fejlede: {exc}')
+
+
+def _ics_escape(text: str) -> str:
+    return text.replace('\\', '\\\\').replace(';', '\\;').replace(',', '\\,').replace('\n', '\\n')
+
+
+def _ics_fold(line: str) -> str:
+    """Fold lines > 75 octets per RFC 5545."""
+    encoded = line.encode('utf-8')
+    if len(encoded) <= 75:
+        return line
+    result, chunk = [], b''
+    for byte in encoded:
+        chunk += bytes([byte])
+        if len(chunk) == 75:
+            result.append(chunk.decode('utf-8', errors='replace'))
+            chunk = b''
+    if chunk:
+        result.append(chunk.decode('utf-8', errors='replace'))
+    return '\r\n '.join(result)
+
+
+def generate_ics() -> str:
+    """Generate a RFC 5545 iCalendar string from current DB state."""
+    now_stamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+
+    def vevent(uid, summary, dtstart, dtend, description='', categories=''):
+        lines = [
+            'BEGIN:VEVENT',
+            f'UID:{uid}',
+            f'DTSTAMP:{now_stamp}',
+            f'DTSTART;VALUE=DATE:{dtstart}',
+            f'DTEND;VALUE=DATE:{dtend}',
+            f'SUMMARY:{_ics_escape(summary)}',
+        ]
+        if description:
+            lines.append(f'DESCRIPTION:{_ics_escape(description)}')
+        if categories:
+            lines.append(f'CATEGORIES:{categories}')
+        lines.append('END:VEVENT')
+        return lines
+
+    output = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Ambrotos//Fælles Kalender//DA',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH',
+        'X-WR-CALNAME:Ambrotos',
+        'X-WR-TIMEZONE:Europe/Copenhagen',
+    ]
+
+    for ev in GroupEvent.query.order_by(GroupEvent.date).all():
+        nxt = (ev.date + timedelta(days=1)).strftime('%Y%m%d')
+        output += vevent(
+            uid=f'ambrotos-event-{ev.id}@ambrotos',
+            summary=ev.title,
+            dtstart=ev.date.strftime('%Y%m%d'),
+            dtend=nxt,
+            description=ev.description or '',
+            categories='GROUP-EVENT',
+        )
+
+    for ud in UnavailableDate.query.join(User).order_by(UnavailableDate.date).all():
+        nxt = (ud.date + timedelta(days=1)).strftime('%Y%m%d')
+        output += vevent(
+            uid=f'ambrotos-unavail-{ud.user_id}-{ud.date.isoformat()}@ambrotos',
+            summary=f'Utilgængelig: {ud.user.username}',
+            dtstart=ud.date.strftime('%Y%m%d'),
+            dtend=nxt,
+            categories='UNAVAILABLE',
+        )
+
+    output.append('END:VCALENDAR')
+    return '\r\n'.join(_ics_fold(ln) for ln in output) + '\r\n'
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -349,6 +526,17 @@ def logout():
 
 
 # ── API ────────────────────────────────────────────────────────────────────────
+
+@app.route('/calendar.ics')
+@login_required
+def serve_ics():
+    from flask import Response
+    return Response(
+        generate_ics(),
+        mimetype='text/calendar; charset=utf-8',
+        headers={'Content-Disposition': 'inline; filename="ambrotos.ics"'},
+    )
+
 
 @app.route('/api/events')
 @login_required
@@ -483,9 +671,11 @@ def toggle_unavailable():
     if existing:
         db.session.delete(existing)
         db.session.commit()
+        write_backup()
         return jsonify({'action': 'removed', 'date': date_str})
     db.session.add(UnavailableDate(user_id=current_user.id, date=d))
     db.session.commit()
+    write_backup()
     return jsonify({'action': 'added', 'date': date_str})
 
 
@@ -525,6 +715,7 @@ def create_group_event():
     event = GroupEvent(title=title, description=description, date=d, created_by=current_user.id)
     db.session.add(event)
     db.session.commit()
+    write_backup()
     return jsonify({'id': event.id, 'title': event.title, 'date': event.date.isoformat()}), 201
 
 
@@ -575,6 +766,7 @@ def delete_group_event(event_id):
         return jsonify({'error': 'Ikke tilladt'}), 403
     db.session.delete(event)
     db.session.commit()
+    write_backup()
     return jsonify({'deleted': True})
 
 
@@ -591,6 +783,7 @@ def add_event_comment(event_id):
     comment = EventComment(event_id=event_id, user_id=current_user.id, text=text)
     db.session.add(comment)
     db.session.commit()
+    write_backup()
     return jsonify({
         'id': comment.id,
         'text': comment.text,
@@ -684,6 +877,7 @@ def admin_delete_user(user_id):
         return jsonify({'error': 'Ikke fundet'}), 404
     db.session.delete(u)
     db.session.commit()
+    write_backup()
     return jsonify({'deleted': True})
 
 
@@ -695,24 +889,23 @@ def init_db():
         password = '123'
         if User.query.count() == 0:
             for i, name in enumerate(MEMBER_NAMES):
-                user = User(username=name, color=MEMBER_COLORS[i])
+                user = User(username=name, color=MEMBER_COLORS[i], is_admin=True)
                 user.set_password(password)
                 db.session.add(user)
             db.session.commit()
-            print(f"✓ Oprettet {len(MEMBER_NAMES)} brugere")
-            print(f"  Adgangskode for alle: '{password}'")
+            print(f"✓ Oprettet {len(MEMBER_NAMES)} brugere (alle er admins)")
+            restore_from_backup()
         else:
             db_type = 'PostgreSQL' if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite'
             print(f"✓ Forbundet til {db_type} — {User.query.count()} brugere, data intakt")
-
-        # Ensure at least one admin exists (Kasper by default)
-        if not User.query.filter_by(is_admin=True).first():
-            admin = User.query.filter(User.username.ilike('%kasper%')).first() \
-                    or User.query.order_by(User.id).first()
-            if admin:
-                admin.is_admin = True
+            restore_from_backup()
+            # Ensure all existing users have admin rights
+            updated = User.query.filter_by(is_admin=False).all()
+            if updated:
+                for u in updated:
+                    u.is_admin = True
                 db.session.commit()
-                print(f"  Admin: {admin.username}")
+                print(f"  {len(updated)} bruger(e) opgraderet til admin")
 
 
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').
