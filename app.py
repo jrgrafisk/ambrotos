@@ -1,12 +1,14 @@
 import os
-import json
-from datetime import datetime, date
+import re
+import calendar as cal_module
+from datetime import datetime, date, timedelta
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from anthropic import Anthropic
+import dateparser
+from dateparser.search import search_dates
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,8 +29,6 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message = 'Log venligst ind for at fortsætte.'
 
-anthropic_client = Anthropic()  # Reads ANTHROPIC_API_KEY from environment
-
 MEMBER_NAMES = [
     'Anders', 'Birthe', 'Christian', 'Dorte', 'Erik',
     'Freja', 'Gunnar', 'Helle', 'Ivan', 'Jette',
@@ -40,6 +40,125 @@ MEMBER_COLORS = [
     '#00acc1', '#f4511e', '#3949ab', '#00897b', '#c0ca33',
     '#ffb300', '#d81b60', '#6d4c41', '#546e7a',
 ]
+
+
+# ── Danish date helpers ─────────────────────────────────────────────────────────
+
+DANISH_MONTHS = {
+    'januar': 1, 'jan': 1,
+    'februar': 2, 'feb': 2,
+    'marts': 3, 'mar': 3,
+    'april': 4, 'apr': 4,
+    'maj': 5,
+    'juni': 6, 'jun': 6,
+    'juli': 7, 'jul': 7,
+    'august': 8, 'aug': 8,
+    'september': 9, 'sep': 9,
+    'oktober': 10, 'okt': 10,
+    'november': 11, 'nov': 11,
+    'december': 12, 'dec': 12,
+}
+
+DANISH_MONTH_NAMES = {
+    1: 'januar', 2: 'februar', 3: 'marts', 4: 'april',
+    5: 'maj', 6: 'juni', 7: 'juli', 8: 'august',
+    9: 'september', 10: 'oktober', 11: 'november', 12: 'december',
+}
+
+DANISH_WEEKDAYS = {
+    'mandag': 0, 'tirsdag': 1, 'onsdag': 2, 'torsdag': 3,
+    'fredag': 4, 'lørdag': 5, 'lordag': 5, 'søndag': 6, 'sondag': 6,
+}
+
+
+def parse_dates_from_message(message: str) -> list:
+    """Extract date objects from a Danish natural-language message."""
+    today = date.today()
+    msg = message.lower().strip()
+
+    # Pattern 1: "alle <ugedag>e i <måned> [år]"
+    m = re.search(r'alle\s+(\w+)\s+i\s+(\w+)(?:\s+(\d{4}))?', msg)
+    if m:
+        wday_raw = m.group(1)
+        wday = DANISH_WEEKDAYS.get(wday_raw) or DANISH_WEEKDAYS.get(wday_raw.rstrip('e'))
+        month = DANISH_MONTHS.get(m.group(2))
+        year = int(m.group(3)) if m.group(3) else today.year
+        if wday is not None and month:
+            _, n = cal_module.monthrange(year, month)
+            return [date(year, month, d) for d in range(1, n + 1)
+                    if date(year, month, d).weekday() == wday]
+
+    # Pattern 2: "fra <d>. [m] til <d>. <m> [år]"
+    m = re.search(r'fra\s+(\d+)\.?\s*(\w+)?\s+til\s+(\d+)\.?\s*(\w+)(?:\s+(\d{4}))?', msg)
+    if m:
+        start_d = int(m.group(1))
+        start_mn = m.group(2)
+        end_d = int(m.group(3))
+        end_mn = m.group(4)
+        year = int(m.group(5)) if m.group(5) else today.year
+        end_month = DANISH_MONTHS.get(end_mn)
+        start_month = DANISH_MONTHS.get(start_mn) if start_mn else end_month
+        if start_month and end_month:
+            start = date(year, start_month, start_d)
+            end = date(year, end_month, end_d)
+            cur, result = start, []
+            while cur <= end:
+                result.append(cur)
+                cur += timedelta(days=1)
+            return result
+
+    # Pattern 3: list of days sharing one month — e.g. "5., 12. og 19. januar"
+    months_in_msg = set()
+    for name, num in DANISH_MONTHS.items():
+        if re.search(r'\b' + re.escape(name) + r'\b', msg):
+            months_in_msg.add(num)
+
+    if len(months_in_msg) == 1:
+        month = next(iter(months_in_msg))
+        year_m = re.search(r'\b(\d{4})\b', msg)
+        year = int(year_m.group(1)) if year_m else today.year
+        day_nums = [int(d) for d in re.findall(r'\b(\d{1,2})\.', msg) if int(d) <= 31]
+        result = []
+        for day in day_nums:
+            try:
+                d = date(year, month, day)
+                if d < today and not year_m:
+                    d = date(year + 1, month, day)
+                if d not in result:
+                    result.append(d)
+            except ValueError:
+                pass
+        if result:
+            return sorted(result)
+
+    # Fallback: dateparser.search.search_dates
+    settings = {
+        'LANGUAGES': ['da'],
+        'PREFER_DATES_FROM': 'future',
+        'RELATIVE_BASE': datetime.combine(today, datetime.min.time()),
+    }
+    found = search_dates(message, languages=['da'], settings=settings)
+    if found:
+        seen, result = set(), []
+        for _, dt in found:
+            d = dt.date()
+            if d not in seen:
+                seen.add(d)
+                result.append(d)
+        return result
+
+    return []
+
+
+def format_dates_danish(date_strings: list) -> str:
+    """Format a list of ISO date strings into a readable Danish string."""
+    if not date_strings:
+        return ""
+    dates_obj = [date.fromisoformat(s) for s in date_strings]
+    formatted = [f"{d.day}. {DANISH_MONTH_NAMES[d.month]}" for d in dates_obj]
+    if len(formatted) == 1:
+        return formatted[0]
+    return ", ".join(formatted[:-1]) + " og " + formatted[-1]
 
 
 # ── Models ─────────────────────────────────────────────────────────────────────
@@ -144,96 +263,61 @@ def chat():
     if not message:
         return jsonify({'error': 'Tom besked'}), 400
 
-    today = date.today()
-    current_year = today.year
+    is_delete = message.lower().startswith(('slet ', 'fjern '))
+    parse_text = re.sub(r'^(slet|fjern)\s+', '', message, flags=re.IGNORECASE).strip()
 
-    system = f"""Du er en kalenderassistent for et dansk mødeplanlægningssystem.
-Din opgave er at fortolke brugerens besked og udtrække datoer.
+    dates = parse_dates_from_message(parse_text)
 
-VIGTIGE REGLER:
-- Dagens dato: {today.isoformat()} (år {current_year})
-- Hvis brugeren skriver "slet [dato]" eller "fjern [dato]", skal den dato slettes
-- Alle andre beskeder tilføjer datoer som "ikke tilgængelig"
-- Understøt danske datoformater: "15. marts", "d. 15/3", "15-03-2025", "mandag den 3. juni", "2025-03-15" osv.
-- Hvis intet år nævnes, brug {current_year} — eller {current_year + 1} hvis datoen allerede er passeret
-- Perioder: "fra 1. til 5. marts" = alle dage inklusiv begge slutdatoer
-- Lister: "5., 12. og 19. januar" = tre separate datoer
-- Ugedage i en måned: "alle mandage i marts {current_year}" = alle mandage i den måned
-
-SVAR KUN MED GYLDIG JSON (ingen forklarende tekst, ingen markdown):
-{{
-  "add_dates": ["YYYY-MM-DD"],
-  "delete_dates": ["YYYY-MM-DD"],
-  "response": "Bekræftelsesbesked på dansk til brugeren"
-}}"""
-
-    try:
-        ai_msg = anthropic_client.messages.create(
-            model='claude-opus-4-6',
-            max_tokens=1024,
-            system=system,
-            messages=[{'role': 'user', 'content': message}],
-        )
-        raw = ai_msg.content[0].text.strip()
-
-        # Strip markdown code fences if the model added them
-        if raw.startswith('```'):
-            lines = raw.splitlines()
-            inner = lines[1:] if lines[0].startswith('```') else lines
-            if inner and inner[-1].strip() == '```':
-                inner = inner[:-1]
-            raw = '\n'.join(inner).strip()
-
-        parsed = json.loads(raw)
-        added, deleted, already_exists, not_found = [], [], [], []
-
-        for date_str in parsed.get('add_dates', []):
-            try:
-                d = datetime.strptime(date_str, '%Y-%m-%d').date()
-                existing = UnavailableDate.query.filter_by(
-                    user_id=current_user.id, date=d
-                ).first()
-                if existing:
-                    already_exists.append(date_str)
-                else:
-                    db.session.add(UnavailableDate(user_id=current_user.id, date=d))
-                    added.append(date_str)
-            except ValueError:
-                pass  # Skip unparseable dates
-
-        for date_str in parsed.get('delete_dates', []):
-            try:
-                d = datetime.strptime(date_str, '%Y-%m-%d').date()
-                existing = UnavailableDate.query.filter_by(
-                    user_id=current_user.id, date=d
-                ).first()
-                if existing:
-                    db.session.delete(existing)
-                    deleted.append(date_str)
-                else:
-                    not_found.append(date_str)
-            except ValueError:
-                pass
-
-        db.session.commit()
-
+    if not dates:
         return jsonify({
-            'response': parsed.get('response', 'Forstået.'),
-            'added': added,
-            'deleted': deleted,
-            'already_exists': already_exists,
-            'not_found': not_found,
+            'response': (
+                'Jeg forstod ikke hvilken dato du mente. '
+                'Prøv fx "15. marts", "fra 1. til 5. april" eller "alle mandage i maj".'
+            ),
+            'added': [], 'deleted': [], 'already_exists': [], 'not_found': [],
         })
 
-    except json.JSONDecodeError:
-        return jsonify({
-            'response': 'Beklager, jeg forstod ikke svaret. Prøv at skrive dato(erne) igen.',
-            'added': [],
-            'deleted': [],
-        })
-    except Exception as e:
-        app.logger.error(f"Chat error: {e}")
-        return jsonify({'error': 'Der opstod en fejl. Prøv igen.'}), 500
+    added, deleted, already_exists, not_found = [], [], [], []
+
+    for d in dates:
+        existing = UnavailableDate.query.filter_by(user_id=current_user.id, date=d).first()
+        if is_delete:
+            if existing:
+                db.session.delete(existing)
+                deleted.append(d.isoformat())
+            else:
+                not_found.append(d.isoformat())
+        else:
+            if existing:
+                already_exists.append(d.isoformat())
+            else:
+                db.session.add(UnavailableDate(user_id=current_user.id, date=d))
+                added.append(d.isoformat())
+
+    db.session.commit()
+
+    if is_delete:
+        if deleted:
+            response = f"Slettet: {format_dates_danish(deleted)}."
+            if not_found:
+                response += f" Ikke fundet: {format_dates_danish(not_found)}."
+        else:
+            response = f"Ingen af de nævnte datoer ({format_dates_danish(not_found)}) var markeret som utilgængelig."
+    else:
+        if added:
+            response = f"Du er nu markeret som utilgængelig: {format_dates_danish(added)}."
+            if already_exists:
+                response += f" Allerede markeret: {format_dates_danish(already_exists)}."
+        else:
+            response = f"Alle nævnte datoer var allerede markeret som utilgængelig."
+
+    return jsonify({
+        'response': response,
+        'added': added,
+        'deleted': deleted,
+        'already_exists': already_exists,
+        'not_found': not_found,
+    })
 
 
 # ── Database seed ──────────────────────────────────────────────────────────────
