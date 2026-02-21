@@ -540,7 +540,7 @@ def add_event_comment(event_id):
 
 def init_db():
     with app.app_context():
-        db.create_all()
+        db.create_all()   # only creates tables that don't yet exist
         password = '123'
         if User.query.count() == 0:
             for i, name in enumerate(MEMBER_NAMES):
@@ -551,17 +551,8 @@ def init_db():
             print(f"✓ Oprettet {len(MEMBER_NAMES)} brugere")
             print(f"  Adgangskode for alle: '{password}'")
         else:
-            existing = User.query.order_by(User.id).all()
-            for i, user in enumerate(existing):
-                if i < len(MEMBER_NAMES):
-                    user.username = MEMBER_NAMES[i]
-                    user.color = MEMBER_COLORS[i]
-                    user.set_password(password)
-                else:
-                    db.session.delete(user)
-            db.session.commit()
-            print(f"✓ Brugere opdateret ({min(len(existing), len(MEMBER_NAMES))} brugere)")
-            print(f"  Adgangskode opdateret til: '{password}'")
+            db_type = 'PostgreSQL' if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite'
+            print(f"✓ Forbundet til {db_type} — {User.query.count()} brugere, data intakt")
 
 
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').
