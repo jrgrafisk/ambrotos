@@ -4,48 +4,55 @@ This file provides guidance for AI assistants (Claude and others) working in thi
 
 ## Project Overview
 
-**Ambrotos** is a shared team calendar web application built with Python/Flask and powered by the Claude AI API. Team members log in and mark dates when they are unavailable. An AI chat interface accepts natural-language Danish input and automatically updates the calendar.
+**Ambrotos** is a shared team calendar web application built with Python/Flask. Team members log in and mark dates when they are unavailable. A natural-language Danish chat interface parses date expressions and automatically updates the calendar. Users can also create group events with attendance tracking and comments.
 
 **Key features:**
-- 14 pre-created users, all sharing the password `kodeordetersvært`
-- Monthly/weekly calendar view showing each member's unavailable dates (color-coded per user)
-- AI chat powered by `claude-opus-4-6` that parses Danish date expressions and adds/removes dates
-- Click any calendar date or event to see who is unavailable; add/delete your own dates directly from the modal
-- Delete a date by typing `slet <dato>` in the chat
+- 13 pre-created users; admin users can create/edit/delete users via the admin panel
+- Monthly/3-month/12-month calendar view showing each member's unavailable dates (colour-coded avatars per user)
+- Chat interface accepts natural-language Danish input and adds/removes unavailable dates using local date parsing (no external AI)
+- Danish public holidays displayed on the calendar
+- Click any calendar date to see who is unavailable; add/delete your own dates directly from the modal
+- Group events with title, description, attendance view, and threaded comments
+- Admin panel for user management (`/admin`)
+- iCalendar export at `/calendar.ics`
+- Data backup/restore via a local JSON file and optional FTP upload
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.11+, Flask 3, Flask-SQLAlchemy, Flask-Login |
-| Database | SQLite (file: `instance/calendar.db`) |
-| AI | Anthropic Python SDK (`claude-opus-4-6`) |
+| Database | SQLite (local dev) or PostgreSQL (production via `DATABASE_URL`) |
+| Date parsing | `dateparser` library with custom Danish regex patterns |
 | Frontend | Vanilla JS, FullCalendar v6 (CDN), custom CSS |
 | Auth | Werkzeug password hashing |
+| Production | Gunicorn, Render (or any WSGI host) |
 
 ## Repository Structure
 
 ```
 ambrotos/
-├── app.py               # Flask application, routes, DB models, AI chat endpoint
+├── app.py               # Flask application, routes, DB models, date parsing
 ├── requirements.txt     # Python dependencies
-├── .env.example         # Required environment variables (copy to .env)
+├── .env.example         # Environment variable template
 ├── .gitignore
 ├── CLAUDE.md
+├── data/
+│   └── calendar_backup.json  # Git-tracked backup (auto-updated on every write)
 ├── templates/
 │   ├── base.html        # HTML shell (head, flash messages, script block)
 │   ├── login.html       # Login form
-│   └── index.html       # Main page (calendar + sidebar with legend + chat)
+│   ├── index.html       # Main page (calendar + sidebar with legend and upcoming events)
+│   └── admin.html       # Admin panel (user management)
 └── static/
     ├── css/style.css    # All styles — variables, layout, components
-    └── js/app.js        # FullCalendar init, chat logic, modal, API calls
+    └── js/app.js        # FullCalendar init, modal logic, group events, API calls
 ```
 
 ## Development Setup
 
 ### Prerequisites
 - Python 3.11+
-- An Anthropic API key (get one at https://console.anthropic.com)
 
 ### Installation
 
@@ -62,37 +69,74 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY=<your key>
+# Edit .env as needed (SECRET_KEY and FTP vars; ANTHROPIC_API_KEY is unused)
 
-# Run the app (creates DB and seeds 14 users on first start)
+# Run the app (creates DB and seeds 13 users on first start)
 python app.py
 ```
 
-Open http://localhost:5000 in your browser. Log in with any of the 14 usernames (e.g. `Anders`) and password `kodeordetersvært`.
+Open http://localhost:5000 in your browser. Log in with any of the 13 usernames and the seed password (`123` for a fresh install with no backup).
 
 ### Users
 
-The 14 pre-seeded users are:
-`Anders`, `Birthe`, `Christian`, `Dorte`, `Erik`, `Freja`, `Gunnar`, `Helle`, `Ivan`, `Jette`, `Klaus`, `Lene`, `Mikkel`, `Nina`
+The 13 pre-seeded users are:
+`Anders Badsberg`, `Rasmus Bjerg`, `Mikael`, `Martin Bach`, `Anders Busch`, `Kristian`, `Rasmus Borup`, `Kasper`, `Bjarne`, `Jakob`, `Mikkel`, `Johan`, `Martin Kjær`
 
-Password for all: `kodeordetersvært`
+Default seed password: `123` (existing deployments restore passwords from backup)
+
+Admin users can manage all users at `/admin`.
 
 ## Key Files and Conventions
 
 ### `app.py`
 
-- **Models**: `User` (id, username, password_hash, color) and `UnavailableDate` (user_id, date). A unique constraint prevents duplicate entries per user/date.
-- **`init_db()`**: Called on startup; creates tables and seeds users if the DB is empty.
-- **`GET /api/events`**: Returns all unavailable dates as FullCalendar-compatible event objects.
-- **`POST /api/chat`**: Accepts `{ message: string }`, calls Claude, parses JSON response, writes to DB. Returns `{ response, added, deleted, already_exists, not_found }`.
-- The Claude system prompt instructs the model to return **only valid JSON** — no markdown, no prose. The endpoint strips ` ``` ` fences defensively.
-- Model used: `claude-opus-4-6` (no thinking, 1024 max tokens — date parsing is a simple structured extraction task).
+- **Models**:
+  - `User` (id, username, password_hash, color, is_admin)
+  - `UnavailableDate` (user_id, date, created_at) — unique constraint per user/date
+  - `GroupEvent` (id, title, description, date, created_by, created_at)
+  - `EventComment` (event_id, user_id, text, created_at)
+- **`init_db()`**: Called on startup; creates tables, restores from backup if available, seeds default users if DB is empty.
+- **`parse_dates_from_message(message)`**: Extracts `date` objects from Danish natural-language strings using regex patterns and `dateparser`. Supports patterns like `"alle mandage i maj"`, `"fra 1. til 5. april"`, and arbitrary day lists.
+- **`write_backup()`**: Serialises all DB data to `data/calendar_backup.json` and optionally pushes to FTP in a background thread. Called after every write operation.
+- **`restore_from_backup()`**: On startup, downloads backup from FTP if no local file exists, then repopulates empty tables from JSON.
+
+#### Routes
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/` | Main calendar page (login required) |
+| GET/POST | `/login` | Login form |
+| GET | `/logout` | Logout |
+| GET | `/calendar.ics` | iCalendar export of all events |
+| GET | `/admin` | Admin panel (admin users only) |
+| GET | `/api/events` | All unavailable dates + holidays + group events (FullCalendar format) |
+| POST | `/api/chat` | Parse Danish date message; add/remove unavailable dates for current user |
+| POST | `/api/unavailable/toggle` | Toggle a single date as unavailable for current user |
+| GET | `/api/group-events` | Upcoming group events (next 6 months) |
+| POST | `/api/group-events` | Create a group event |
+| GET | `/api/group-events/<id>` | Event detail with attendance and comments |
+| DELETE | `/api/group-events/<id>` | Delete own event |
+| POST | `/api/group-events/<id>/comments` | Add comment to event |
+| GET | `/api/admin/users` | List all users (admin only) |
+| POST | `/api/admin/users` | Create user (admin only) |
+| PUT | `/api/admin/users/<id>` | Update user (admin only) |
+| DELETE | `/api/admin/users/<id>` | Delete user (admin only) |
+
+#### `POST /api/chat` behaviour
+
+Accepts `{ message: string }`. Parses the Danish text locally:
+- If the message starts with `slet` or `fjern`, matching dates are deleted.
+- Otherwise, matching dates are added.
+- Returns `{ response, added, deleted, already_exists, not_found }`.
+- No external AI is called; date parsing uses `parse_dates_from_message()`.
 
 ### `static/js/app.js`
 
-- **`initCalendar()`**: Sets up FullCalendar with Danish locale, fetches events via `fetchEvents()`, caches them in `allEvents`.
-- **`showDateModal(dateStr)`**: Filters `allEvents` locally (no extra API call) to show who is unavailable on a given date. Provides delete/add buttons for the current user.
-- **`sendChatMessage(text)`**: POSTs to `/api/chat`, shows typing indicator, displays AI response as a chat bubble, calls `refreshCalendar()` if any dates changed.
+- **`initCalendar()`**: Sets up FullCalendar with Danish locale, month/3-month/12-month views. Fetches events via `fetchEvents()`, caches them in `allEvents`.
+- **`renderUnavailCircles()`**: Injects colour-coded avatar circles into calendar day cells for unavailable members (hidden from FullCalendar's native event bars).
+- **`showDateModal(dateStr)`**: Filters `allEvents` locally to show who is unavailable on a given date. Provides delete/add buttons for the current user.
+- **`showEventDetailModal(eventId)`**: Fetches group event details and displays attendance (attending/not attending) and comments.
+- **`toggleEventMode()`**: Enables "event creation mode" — clicking a day opens the event create modal instead of the date detail modal.
 - All user-provided strings run through `escapeHtml()` before insertion into the DOM.
 
 ### `static/css/style.css`
@@ -103,12 +147,14 @@ Uses CSS custom properties (`--primary`, `--bg`, `--card`, etc.) defined in `:ro
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | **Yes** | Anthropic API key |
 | `SECRET_KEY` | No | Flask session secret (use a long random string in production) |
-| `FTP_HOST` | No | FTP server hostname (e.g., `ftp.jrgrafisk.dk`) |
+| `DATABASE_URL` | No | PostgreSQL connection URL (defaults to SQLite `instance/calendar.db`) |
+| `FTP_HOST` | No | FTP server hostname for backup (e.g., `ftp.jrgrafisk.dk`) |
 | `FTP_USER` | No | FTP username |
 | `FTP_PASS` | No | FTP password |
 | `FTP_PATH` | No | Remote directory for backup (default: `/ambrotos`) |
+
+> **Note**: `ANTHROPIC_API_KEY` appears in `.env.example` as a historical artefact. The application no longer calls the Anthropic API.
 
 ## Git Workflow
 
@@ -118,33 +164,38 @@ Uses CSS custom properties (`--primary`, `--bg`, `--card`, etc.) defined in `:ro
 
 ### Commit Messages
 ```
-feat: add weekly view toggle to calendar
+feat: add group events with attendance and comments
 fix: prevent duplicate date insertion in chat handler
-chore: update CLAUDE.md with user list
+chore: update CLAUDE.md with current application state
 ```
 
 ## Testing
 
 No automated test suite yet. Manual testing checklist:
 
-- [ ] Log in as each of several users, add different dates, verify calendar shows all entries with correct colors
+- [ ] Log in as several users, add different dates, verify calendar shows all entries with correct colour-coded circles
 - [ ] Type date expressions in various Danish formats: `"15. marts"`, `"d. 5/4"`, `"fra 1. til 3. juni"`, `"alle mandage i maj"`
 - [ ] Delete a date via chat (`slet 15. marts`) and via the modal Slet button
 - [ ] Click a date with multiple unavailable members — verify modal lists all
 - [ ] Click a date you have no entry for — verify "Markér mig" button appears and works
+- [ ] Create a group event using event-creation mode; verify it appears on calendar and in upcoming events list
+- [ ] Open a group event modal, add a comment, verify it appears; delete the event as creator
+- [ ] Log in as admin, open `/admin`, create/edit/delete a user
+- [ ] Download `/calendar.ics` and import into a calendar application
 - [ ] Resize browser to < 768px — verify sidebar stacks below calendar
 
 ## Common Pitfalls
 
 - **DB path**: Flask-SQLAlchemy with SQLite creates the file in an `instance/` subdirectory by default when using `sqlite:///filename.db`. This directory is git-ignored.
-- **Special characters in password**: `kodeordetersvært` contains `æ`. Werkzeug's `generate_password_hash` / `check_password_hash` handle UTF-8 correctly; no issues expected.
-- **Claude JSON output**: On rare occasions the model may wrap its response in markdown code fences. `app.py` strips these defensively. If the model refuses or returns non-JSON, the chat endpoint falls back to a Danish error message.
+- **DATABASE_URL on Render**: Render provides a `postgres://` URL; `app.py` automatically rewrites it to `postgresql://` for SQLAlchemy compatibility.
+- **Backup restore on redeploy**: `restore_from_backup()` only populates *empty* tables, so a partial DB will not be overwritten. Drop and recreate the DB if data is inconsistent.
+- **FTP upload is async**: `push_backup_to_ftp()` spawns a daemon thread; failures are logged to stdout but do not affect the HTTP response.
 - **FullCalendar locale**: The Danish locale is loaded via the `locales-all.global.min.js` CDN bundle. If offline, the calendar falls back to English.
 
 ## Updating This File
 
 Keep CLAUDE.md current when:
 - New routes or models are added to `app.py`
-- The Claude model or prompt changes
+- The date parsing logic or supported patterns change
 - New environment variables are introduced
 - Significant UI or workflow changes are made
