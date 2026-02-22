@@ -1,0 +1,290 @@
+# Multi-Team Support: Separate Kalendere pr. Klub/Team
+
+Dette dokument beskriver, hvordan den nuværende kalenderløsning kan udvides til at understøtte **flere teams/klubber** (f.eks. Ambrotos og en cykelklub) med **separate kalendere**, hvor den kalender, brugeren ser, styres af, hvilken klub de logger ind under.
+
+---
+
+## Problembeskrivelse
+
+Den nuværende løsning har en enkelt kalender for Ambrotos. For at understøtte flere klubber (f.eks. en cykelklub) skal:
+1. Brugere kunne tilhøre **flere klubber/teams**.
+2. Hver klub skal have sin **egen kalender** (separate `unavailable_dates`, `group_events`, `event_comments`).
+3. Brugerens login skal bestemme, hvilken klubs kalender de ser og interagerer med.
+
+---
+
+## Løsningsforslag
+
+### 1. Database-ændringer
+
+Tilføj en `Team`-model og en `UserTeam`-associationstabel for at håndtere flere klubber pr. bruger:
+
+```python
+class Team(db.Model):
+    __tablename__ = 'teams'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(80), unique=True, nullable=False)
+    description = db.Column(db.Text, default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Relationer til klub-specifikke data
+    events = db.relationship('GroupEvent', backref='team', lazy=True)
+    unavailable_dates = db.relationship('UnavailableDate', backref='team', lazy=True)
+
+class UserTeam(db.Model):
+    __tablename__ = 'user_teams'
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
+    team_id = db.Column(db.Integer, db.ForeignKey('teams.id'), primary_key=True)
+    is_admin = db.Column(db.Boolean, default=False)
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+```
+
+Opdater de eksisterende modeller for at inkludere `team_id`:
+
+```python
+class UnavailableDate(db.Model):
+    __tablename__ = 'unavailable_dates'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    team_id = db.Column(db.Integer, db.ForeignKey('teams.id'), nullable=False)  # Ny
+    date = db.Column(db.Date, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class GroupEvent(db.Model):
+    __tablename__ = 'group_events'
+    id = db.Column(db.Integer, primary_key=True)
+    team_id = db.Column(db.Integer, db.ForeignKey('teams.id'), nullable=False)  # Ny
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default='')
+    date = db.Column(db.Date, nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class EventComment(db.Model):
+    __tablename__ = 'event_comments'
+    id = db.Column(db.Integer, primary_key=True)
+    event_id = db.Column(db.Integer, db.ForeignKey('group_events.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+```
+
+---
+
+### 2. Login og Session-håndtering
+
+Tilføj et felt til `User`-modellen for at gemme den **nuværende aktive klub** for brugeren:
+
+```python
+class User(UserMixin, db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+    color = db.Column(db.String(7), nullable=False, default='#1e88e5')
+    is_admin = db.Column(db.Boolean, nullable=False, default=True)
+    current_team_id = db.Column(db.Integer, db.ForeignKey('teams.id'))  # Ny: Gemmer den aktive klub
+    teams = db.relationship('UserTeam', backref='user', lazy=True)  # Relation til brugerens klubber
+```
+
+Opdater login-logikken for at lade brugeren **vælge klub** ved login (eller gemme det i sessionen):
+
+```python
+from flask_login import current_user
+from flask import session
+
+@app.route('/select_team/<int:team_id>')
+@login_required
+def select_team(team_id):
+    team = Team.query.get(team_id)
+    if not team or team not in [ut.team for ut in current_user.teams]:
+        flash('Du har ikke adgang til denne klub.', 'error')
+        return redirect(url_for('index'))
+    current_user.current_team_id = team_id
+    db.session.commit()
+    session['current_team_id'] = team_id  # Gem også i session for hurtig adgang
+    flash(f'Skiftet til klub: {team.name}', 'success')
+    return redirect(url_for('index'))
+```
+
+---
+
+### 3. Filtrering af Data
+
+Opdater alle database-forespørgsler for at **filtrere efter den aktive klub**:
+
+```python
+from flask import session
+
+def get_current_team():
+    if hasattr(current_user, 'current_team_id') and current_user.current_team_id:
+        return Team.query.get(current_user.current_team_id)
+    return None
+
+@app.route('/api/events')
+@login_required
+def get_events():
+    current_team = get_current_team()
+    if not current_team:
+        return jsonify({'error': 'Ingen klub valgt'}), 400
+
+    # Filtrer efter den aktive klub
+    all_dates = UnavailableDate.query.filter_by(team_id=current_team.id).join(User).all()
+    events = []
+    for d in all_dates:
+        events.append({
+            'id': f"{d.user_id}-{d.date.isoformat()}",
+            'title': d.user.username,
+            'start': d.date.isoformat(),
+            'color': d.user.color,
+            'textColor': '#ffffff',
+            'extendedProps': {
+                'userId': d.user_id,
+                'username': d.user.username,
+                'isOwn': d.user_id == current_user.id,
+                'isHoliday': False,
+            },
+        })
+
+    # Tilføj klub-specifikke group events
+    for e in GroupEvent.query.filter_by(team_id=current_team.id).all():
+        events.append({
+            'id': f"gevent-{e.id}",
+            'title': e.title,
+            'start': e.date.isoformat(),
+            'color': '#7c3aed',
+            'textColor': '#ffffff',
+            'extendedProps': {
+                'isHoliday': False,
+                'isGroupEvent': True,
+                'eventId': e.id,
+            },
+        })
+
+    return jsonify(events)
+```
+
+---
+
+### 4. Backup-logik
+
+Opdater `write_backup()` og `restore_from_backup()` for at håndtere **flere klubber**. Backup-filen skal indeholde data pr. klub:
+
+```python
+def write_backup():
+    try:
+        os.makedirs(os.path.dirname(BACKUP_FILE), exist_ok=True)
+        payload = {
+            'exported_at': datetime.utcnow().isoformat(),
+            'teams': {}
+        }
+        for team in Team.query.all():
+            payload['teams'][team.id] = {
+                'name': team.name,
+                'unavailable_dates': [
+                    {'user_id': ud.user_id, 'date': ud.date.isoformat()}
+                    for ud in UnavailableDate.query.filter_by(team_id=team.id).all()
+                ],
+                'group_events': [
+                    {
+                        'id': e.id,
+                        'title': e.title,
+                        'description': e.description or '',
+                        'date': e.date.isoformat(),
+                        'created_by': e.created_by,
+                        'created_at': e.created_at.isoformat(),
+                    }
+                    for e in GroupEvent.query.filter_by(team_id=team.id).order_by(GroupEvent.id).all()
+                ],
+                'event_comments': [
+                    {
+                        'event_id': c.event_id,
+                        'user_id': c.user_id,
+                        'text': c.text,
+                        'created_at': c.created_at.isoformat(),
+                    }
+                    for c in EventComment.query.join(GroupEvent).filter(GroupEvent.team_id == team.id).order_by(EventComment.id).all()
+                ],
+            }
+        with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        push_backup_to_github()
+    except Exception as exc:
+        print(f'⚠ Backup write failed: {exc}')
+```
+
+---
+
+### 5. UI/UX-ændringer
+
+- **Tilføj en dropdown-menu** i toppen af siden, hvor brugeren kan skifte mellem sine klubber.
+- **Vis den aktive klub** tydeligt (f.eks. i headeren: "Aktiv klub: Ambrotos").
+- **Admin-panel**: Lad admins oprette og administrere klubber/brugere.
+
+---
+
+## Implementeringsvejledning
+
+### 1. Database-migration
+
+Kør en Alembic-migration for at tilføje de nye tabeller og felter:
+
+```bash
+flask db migrate -m "tilføj teams og team_id felter"
+flask db upgrade
+```
+
+### 2. Opdater API-endpoints
+
+Sørg for, at **alle endpoints** (f.eks. `/api/events`, `/api/group-events`) filtrerer efter `current_team_id`.
+
+### 3. Opdater frontend
+
+Tilføj en UI-komponent til at **vælge klub** og vis den aktive klub.
+
+### 4. Test
+
+- Opret to klubber (Ambrotos og Cykelklub).
+- Tildel brugere til begge klubber.
+- Tjek, at data er adskilt korrekt, når du skifter klub.
+
+---
+
+## Eksempel på Dataflow
+
+1. Bruger logger ind → Vælger klub (f.eks. "Cykelklub").
+2. `current_team_id` sættes i brugerobjektet og sessionen.
+3. Alle forespørgsler filtreres efter `team_id = current_team_id`.
+4. Backup-filen opdateres med data pr. klub.
+
+---
+
+## Fordele
+
+- **Fleksibilitet**: Samme kodebase kan bruges til flere klubber.
+- **Adskillelse**: Data er fuldstændig adskilt pr. klub.
+- **Skalerbarhed**: Nemt at tilføje flere klubber.
+
+---
+
+## Ulemper/Risici
+
+- **Kompleksitet**: Kræver omhyggelig håndtering af `team_id` i alle forespørgsler.
+- **Backup-størrelse**: Backup-filen bliver større, da den indeholder data for alle klubber.
+- **Migration**: Eksisterende data skal migreres til at tilhøre en klub (f.eks. Ambrotos).
+
+---
+
+## Næste Skridt
+
+1. Implementer database-ændringer og migration.
+2. Opdater API-endpoints til at filtrere efter `team_id`.
+3. Tilføj UI til at vælge klub.
+4. Test med flere klubber og brugere.
+
+---
+
+### Spørgsmål eller Uddybning
+
+- Vil du have hjælp til at implementere migrationen?
+- Skal der tilføjes yderligere funktioner (f.eks. klub-specifikke indstillinger)?
+- Skal backup-logikken udvides til at håndtere flere filer (en pr. klub)?
