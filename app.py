@@ -7,6 +7,8 @@ import threading
 import calendar as cal_module
 from datetime import datetime, date, timedelta
 
+from sqlalchemy import text as sa_text, inspect as sa_inspect
+
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -258,6 +260,7 @@ class GroupEvent(db.Model):
     title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, default='')
     date = db.Column(db.Date, nullable=False)
+    end_date = db.Column(db.Date, nullable=True)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     creator = db.relationship('User', backref='created_events')
@@ -273,6 +276,7 @@ class EventComment(db.Model):
     event_id = db.Column(db.Integer, db.ForeignKey('group_events.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     text = db.Column(db.Text, nullable=False)
+    is_hidden = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     author = db.relationship('User')
 
@@ -314,6 +318,7 @@ def write_backup():
                     'title': e.title,
                     'description': e.description or '',
                     'date': e.date.isoformat(),
+                    'end_date': e.end_date.isoformat() if e.end_date else None,
                     'created_by': e.created_by,
                     'created_at': e.created_at.isoformat(),
                 }
@@ -324,6 +329,7 @@ def write_backup():
                     'event_id': c.event_id,
                     'user_id': c.user_id,
                     'text': c.text,
+                    'is_hidden': c.is_hidden,
                     'created_at': c.created_at.isoformat(),
                 }
                 for c in EventComment.query.order_by(EventComment.id).all()
@@ -447,10 +453,12 @@ def restore_from_backup():
             for item in data.get('group_events', []):
                 if item['created_by'] not in valid_user_ids:
                     continue
+                end_date_str = item.get('end_date')
                 ev = GroupEvent(
                     title=item['title'],
                     description=item.get('description', ''),
                     date=date.fromisoformat(item['date']),
+                    end_date=date.fromisoformat(end_date_str) if end_date_str else None,
                     created_by=item['created_by'],
                     created_at=datetime.fromisoformat(item.get('created_at', datetime.utcnow().isoformat())),
                 )
@@ -467,6 +475,7 @@ def restore_from_backup():
                         event_id=new_eid,
                         user_id=item['user_id'],
                         text=item['text'],
+                        is_hidden=item.get('is_hidden', False),
                         created_at=datetime.fromisoformat(item.get('created_at', datetime.utcnow().isoformat())),
                     ))
             restored_any = True
@@ -529,7 +538,8 @@ def generate_ics() -> str:
     ]
 
     for ev in GroupEvent.query.order_by(GroupEvent.date).all():
-        nxt = (ev.date + timedelta(days=1)).strftime('%Y%m%d')
+        last_day = ev.end_date if ev.end_date and ev.end_date > ev.date else ev.date
+        nxt = (last_day + timedelta(days=1)).strftime('%Y%m%d')
         output += vevent(
             uid=f'ambrotos-event-{ev.id}@ambrotos',
             summary=ev.title,
@@ -675,7 +685,7 @@ def get_events():
 
     # Add group events
     for e in GroupEvent.query.all():
-        events.append({
+        ev_data = {
             'id': f"gevent-{e.id}",
             'title': e.title,
             'start': e.date.isoformat(),
@@ -686,7 +696,10 @@ def get_events():
                 'isGroupEvent': True,
                 'eventId': e.id,
             },
-        })
+        }
+        if e.end_date and e.end_date > e.date:
+            ev_data['end'] = (e.end_date + timedelta(days=1)).isoformat()
+        events.append(ev_data)
 
     return jsonify(events)
 
@@ -786,7 +799,10 @@ def list_group_events():
     today = date.today()
     cutoff = today + timedelta(days=183)
     events = GroupEvent.query.filter(
-        GroupEvent.date >= today,
+        db.or_(
+            GroupEvent.date >= today,
+            db.and_(GroupEvent.end_date.isnot(None), GroupEvent.end_date >= today),
+        ),
         GroupEvent.date <= cutoff,
     ).order_by(GroupEvent.date).all()
     return jsonify([{
@@ -794,6 +810,7 @@ def list_group_events():
         'title': e.title,
         'description': e.description,
         'date': e.date.isoformat(),
+        'end_date': e.end_date.isoformat() if e.end_date else None,
         'creator': e.creator.username,
         'created_by': e.created_by,
         'comment_count': len(e.comments),
@@ -807,13 +824,22 @@ def create_group_event():
     title = data.get('title', '').strip()
     description = data.get('description', '').strip()
     date_str = data.get('date', '')
+    end_date_str = data.get('end_date', '')
     if not title:
         return jsonify({'error': 'Titel mangler'}), 400
     try:
         d = date.fromisoformat(date_str)
     except (ValueError, TypeError):
         return jsonify({'error': 'Ugyldig dato'}), 400
-    event = GroupEvent(title=title, description=description, date=d, created_by=current_user.id)
+    end_d = None
+    if end_date_str:
+        try:
+            end_d = date.fromisoformat(end_date_str)
+            if end_d <= d:
+                end_d = None
+        except (ValueError, TypeError):
+            pass
+    event = GroupEvent(title=title, description=description, date=d, end_date=end_d, created_by=current_user.id)
     db.session.add(event)
     db.session.commit()
     write_backup()
@@ -826,18 +852,48 @@ def get_group_event(event_id):
     event = db.session.get(GroupEvent, event_id)
     if not event:
         return jsonify({'error': 'Ikke fundet'}), 404
+
+    # Collect all dates in the event range for attendance check
+    last_day = event.end_date if event.end_date and event.end_date > event.date else event.date
+    event_dates = set()
+    d = event.date
+    while d <= last_day:
+        event_dates.add(d)
+        d += timedelta(days=1)
+
     unavailable_ids = {
-        ud.user_id for ud in UnavailableDate.query.filter_by(date=event.date).all()
+        ud.user_id for ud in UnavailableDate.query.filter(
+            UnavailableDate.date.in_(event_dates)
+        ).all()
     }
     all_users = User.query.order_by(User.id).all()
+    can_edit = event.created_by == current_user.id or current_user.is_admin
+
+    # Filter hidden comments for non-admins
+    comments = []
+    for c in event.comments:
+        if c.is_hidden and not current_user.is_admin:
+            continue
+        comments.append({
+            'id': c.id,
+            'text': c.text,
+            'author': c.author.username,
+            'author_color': c.author.color,
+            'created_at': c.created_at.strftime('%d. %b %Y %H:%M'),
+            'is_own': c.user_id == current_user.id,
+            'is_hidden': c.is_hidden,
+        })
+
     return jsonify({
         'id': event.id,
         'title': event.title,
         'description': event.description,
         'date': event.date.isoformat(),
+        'end_date': event.end_date.isoformat() if event.end_date else None,
         'creator': event.creator.username,
         'created_by': event.created_by,
         'is_own': event.created_by == current_user.id,
+        'can_edit': can_edit,
         'attending': [
             {'id': u.id, 'username': u.username, 'color': u.color}
             for u in all_users if u.id not in unavailable_ids
@@ -846,14 +902,7 @@ def get_group_event(event_id):
             {'id': u.id, 'username': u.username, 'color': u.color}
             for u in all_users if u.id in unavailable_ids
         ],
-        'comments': [{
-            'id': c.id,
-            'text': c.text,
-            'author': c.author.username,
-            'author_color': c.author.color,
-            'created_at': c.created_at.strftime('%d. %b %Y %H:%M'),
-            'is_own': c.user_id == current_user.id,
-        } for c in event.comments],
+        'comments': comments,
     })
 
 
@@ -863,12 +912,51 @@ def delete_group_event(event_id):
     event = db.session.get(GroupEvent, event_id)
     if not event:
         return jsonify({'error': 'Ikke fundet'}), 404
-    if event.created_by != current_user.id:
+    if event.created_by != current_user.id and not current_user.is_admin:
         return jsonify({'error': 'Ikke tilladt'}), 403
     db.session.delete(event)
     db.session.commit()
     write_backup()
     return jsonify({'deleted': True})
+
+
+@app.route('/api/group-events/<int:event_id>', methods=['PUT'])
+@login_required
+def update_group_event(event_id):
+    event = db.session.get(GroupEvent, event_id)
+    if not event:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    if event.created_by != current_user.id and not current_user.is_admin:
+        return jsonify({'error': 'Ikke tilladt'}), 403
+    data = request.get_json()
+    if 'title' in data:
+        title = data['title'].strip()
+        if not title:
+            return jsonify({'error': 'Titel mangler'}), 400
+        event.title = title
+    if 'description' in data:
+        event.description = data['description'].strip()
+    if 'date' in data:
+        try:
+            event.date = date.fromisoformat(data['date'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Ugyldig startdato'}), 400
+    if 'end_date' in data:
+        if data['end_date']:
+            try:
+                end_d = date.fromisoformat(data['end_date'])
+                event.end_date = end_d if end_d > event.date else None
+            except (ValueError, TypeError):
+                return jsonify({'error': 'Ugyldig slutdato'}), 400
+        else:
+            event.end_date = None
+    db.session.commit()
+    write_backup()
+    return jsonify({
+        'id': event.id, 'title': event.title,
+        'date': event.date.isoformat(),
+        'end_date': event.end_date.isoformat() if event.end_date else None,
+    })
 
 
 @app.route('/api/group-events/<int:event_id>/comments', methods=['POST'])
@@ -892,7 +980,36 @@ def add_event_comment(event_id):
         'author_color': current_user.color,
         'created_at': comment.created_at.strftime('%d. %b %Y %H:%M'),
         'is_own': True,
+        'is_hidden': False,
     }), 201
+
+
+@app.route('/api/group-events/<int:event_id>/comments/<int:comment_id>', methods=['DELETE'])
+@login_required
+def delete_event_comment(event_id, comment_id):
+    comment = db.session.get(EventComment, comment_id)
+    if not comment or comment.event_id != event_id:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    if comment.user_id != current_user.id:
+        return jsonify({'error': 'Ikke tilladt'}), 403
+    db.session.delete(comment)
+    db.session.commit()
+    write_backup()
+    return jsonify({'deleted': True})
+
+
+@app.route('/api/group-events/<int:event_id>/comments/<int:comment_id>/hide', methods=['PUT'])
+@login_required
+@admin_required
+def hide_event_comment(event_id, comment_id):
+    comment = db.session.get(EventComment, comment_id)
+    if not comment or comment.event_id != event_id:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    data = request.get_json()
+    comment.is_hidden = bool(data.get('hidden', True))
+    db.session.commit()
+    write_backup()
+    return jsonify({'id': comment.id, 'is_hidden': comment.is_hidden})
 
 
 # ── Admin routes ───────────────────────────────────────────────────────────────
@@ -986,9 +1103,26 @@ def admin_delete_user(user_id):
 
 # ── Database seed ──────────────────────────────────────────────────────────────
 
+def migrate_db():
+    """Add new columns to existing tables (idempotent)."""
+    inspector = sa_inspect(db.engine)
+    with db.engine.begin() as conn:
+        if inspector.has_table('group_events'):
+            cols = {c['name'] for c in inspector.get_columns('group_events')}
+            if 'end_date' not in cols:
+                conn.execute(sa_text("ALTER TABLE group_events ADD COLUMN end_date DATE"))
+        if inspector.has_table('event_comments'):
+            cols = {c['name'] for c in inspector.get_columns('event_comments')}
+            if 'is_hidden' not in cols:
+                conn.execute(sa_text(
+                    "ALTER TABLE event_comments ADD COLUMN is_hidden BOOLEAN DEFAULT 0 NOT NULL"
+                ))
+
+
 def init_db():
     with app.app_context():
         db.create_all()   # only creates tables that don't yet exist
+        migrate_db()      # add new columns to existing tables
 
         # Try to restore from backup first (includes users if available)
         restore_from_backup()

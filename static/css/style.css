@@ -840,6 +840,53 @@ html, body {
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
+/* Form row (side-by-side fields) */
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.form-row .form-group { flex: 1; }
+
+/* Comment actions */
+.comment-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.comment-action-btn {
+  background: none;
+  border: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.12s, color 0.12s;
+}
+
+.comment-action-btn:hover { background: var(--bg); color: var(--text); }
+.comment-action-btn.danger:hover { color: var(--danger); }
+
+/* Hidden comment styling (admin view) */
+.comment.comment-hidden {
+  opacity: 0.5;
+}
+
+.comment-hidden-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* Textarea in modals */
 .form-group textarea {
   width: 100%;

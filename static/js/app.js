@@ -7,6 +7,7 @@ let allEvents     = [];   // local cache of FullCalendar events
 let eventMode     = false;
 let currentEventId = null;
 let pendingEventDate = null;
+let editingEventId = null; // non-null when editing an existing event
 
 /* ─── Bootstrap ─────────────────────────────────────── */
 
@@ -283,15 +284,28 @@ async function toggleUnavailable(dateStr) {
    ══════════════════════════════════════════════════════ */
 
 function openEventCreateModal(dateStr) {
+  editingEventId = null;
   pendingEventDate = dateStr;
-  const dateObj = new Date(dateStr + 'T12:00:00');
-  const formatted = dateObj.toLocaleDateString('da-DK', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-  });
-  document.getElementById('eventCreateDate').textContent =
-    formatted.charAt(0).toUpperCase() + formatted.slice(1);
+  document.getElementById('eventCreateHeading').textContent = 'Nyt event';
+  document.getElementById('eventSubmitBtn').textContent = 'Opret event';
   document.getElementById('eventTitle').value = '';
   document.getElementById('eventDesc').value  = '';
+  document.getElementById('eventStartDate').value = dateStr;
+  document.getElementById('eventEndDate').value   = '';
+  document.getElementById('eventCreateOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('eventTitle').focus(), 50);
+}
+
+function openEventEditModal(ev) {
+  editingEventId = ev.id;
+  pendingEventDate = ev.date;
+  document.getElementById('eventCreateHeading').textContent = 'Rediger event';
+  document.getElementById('eventSubmitBtn').textContent = 'Gem ændringer';
+  document.getElementById('eventTitle').value = ev.title;
+  document.getElementById('eventDesc').value  = ev.description || '';
+  document.getElementById('eventStartDate').value = ev.date;
+  document.getElementById('eventEndDate').value   = ev.end_date || '';
+  closeEventDetailModal();
   document.getElementById('eventCreateOverlay').style.display = 'flex';
   setTimeout(() => document.getElementById('eventTitle').focus(), 50);
 }
@@ -299,18 +313,31 @@ function openEventCreateModal(dateStr) {
 function closeEventCreateModal() {
   document.getElementById('eventCreateOverlay').style.display = 'none';
   pendingEventDate = null;
+  editingEventId = null;
 }
 
 async function submitEventCreate() {
-  const title = document.getElementById('eventTitle').value.trim();
-  const desc  = document.getElementById('eventDesc').value.trim();
-  if (!title || !pendingEventDate) return;
+  const title    = document.getElementById('eventTitle').value.trim();
+  const desc     = document.getElementById('eventDesc').value.trim();
+  const startDate = document.getElementById('eventStartDate').value;
+  const endDate   = document.getElementById('eventEndDate').value;
+  if (!title || !startDate) return;
+
   try {
-    const resp = await fetch('/api/group-events', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ title, description: desc, date: pendingEventDate }),
-    });
+    let resp;
+    if (editingEventId) {
+      resp = await fetch(`/api/group-events/${editingEventId}`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ title, description: desc, date: startDate, end_date: endDate || null }),
+      });
+    } else {
+      resp = await fetch('/api/group-events', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ title, description: desc, date: startDate, end_date: endDate || null }),
+      });
+    }
     if (resp.ok) {
       closeEventCreateModal();
       if (eventMode) toggleEventMode();
@@ -318,7 +345,7 @@ async function submitEventCreate() {
       loadUpcomingEvents();
     }
   } catch (err) {
-    console.error('Create event error:', err);
+    console.error('Event save error:', err);
   }
 }
 
@@ -333,23 +360,38 @@ async function showEventDetailModal(eventId) {
     if (!resp.ok) return;
     const ev = await resp.json();
 
-    const dateObj = new Date(ev.date + 'T12:00:00');
-    const formatted = dateObj.toLocaleDateString('da-DK', {
-      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-    });
-    document.getElementById('eventDetailTitle').textContent   = ev.title;
-    document.getElementById('eventDetailDate').textContent    =
-      formatted.charAt(0).toUpperCase() + formatted.slice(1);
+    // Format date range
+    const startObj = new Date(ev.date + 'T12:00:00');
+    const fmtOpts = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
+    let dateText = startObj.toLocaleDateString('da-DK', fmtOpts);
+    dateText = dateText.charAt(0).toUpperCase() + dateText.slice(1);
+    if (ev.end_date && ev.end_date !== ev.date) {
+      const endObj = new Date(ev.end_date + 'T12:00:00');
+      let endText = endObj.toLocaleDateString('da-DK', fmtOpts);
+      endText = endText.charAt(0).toUpperCase() + endText.slice(1);
+      dateText += ` — ${endText}`;
+    }
+
+    document.getElementById('eventDetailTitle').textContent = ev.title;
+    document.getElementById('eventDetailDate').textContent  = dateText;
     const descEl = document.getElementById('eventDetailDesc');
-    descEl.textContent    = ev.description || '';
-    descEl.style.display  = ev.description ? '' : 'none';
+    descEl.textContent   = ev.description || '';
+    descEl.style.display = ev.description ? '' : 'none';
     document.getElementById('eventDetailCreator').textContent = `Oprettet af ${ev.creator}`;
-    document.getElementById('eventDetailActions').innerHTML   = ev.is_own
-      ? `<button class="btn btn-sm btn-danger" onclick="deleteGroupEvent(${ev.id})">Slet event</button>`
-      : '';
+
+    // Action buttons: edit + delete for creator and admins
+    let actionsHtml = '';
+    if (ev.can_edit) {
+      actionsHtml += `<button class="btn btn-sm btn-outline" onclick='openEventEditModal(${JSON.stringify({
+        id: ev.id, title: ev.title, description: ev.description,
+        date: ev.date, end_date: ev.end_date
+      })})'>Rediger</button> `;
+      actionsHtml += `<button class="btn btn-sm btn-danger" onclick="deleteGroupEvent(${ev.id})">Slet event</button>`;
+    }
+    document.getElementById('eventDetailActions').innerHTML = actionsHtml;
 
     renderAttendance(ev.attending, ev.not_attending);
-    renderComments(ev.comments);
+    renderComments(ev.comments, eventId);
     document.getElementById('commentInput').value = '';
     document.getElementById('eventDetailOverlay').style.display = 'flex';
   } catch (err) {
@@ -380,22 +422,39 @@ function renderAttendance(attending, notAttending) {
   `;
 }
 
-function renderComments(comments) {
+function renderComments(comments, eventId) {
   const list = document.getElementById('eventComments');
   if (comments.length === 0) {
     list.innerHTML = '<p class="comments-empty">Ingen kommentarer endnu.</p>';
     return;
   }
-  list.innerHTML = comments.map(c => `
-    <div class="comment">
-      <span class="comment-dot" style="background:${c.author_color}"></span>
-      <div class="comment-content">
-        <span class="comment-author">${escapeHtml(c.author)}</span>
-        <span class="comment-time">${escapeHtml(c.created_at)}</span>
-        <p class="comment-text">${escapeHtml(c.text)}</p>
+  list.innerHTML = comments.map(c => {
+    const hiddenClass = c.is_hidden ? ' comment-hidden' : '';
+    const hiddenBadge = c.is_hidden ? '<span class="comment-hidden-badge">skjult</span>' : '';
+    let actions = '';
+    if (c.is_own || IS_ADMIN) {
+      actions = '<div class="comment-actions">';
+      if (IS_ADMIN) {
+        const hideLabel = c.is_hidden ? 'Vis' : 'Skjul';
+        actions += `<button class="comment-action-btn" onclick="toggleHideComment(${eventId}, ${c.id}, ${!c.is_hidden})">${hideLabel}</button>`;
+      }
+      if (c.is_own) {
+        actions += `<button class="comment-action-btn danger" onclick="deleteComment(${eventId}, ${c.id})">Slet</button>`;
+      }
+      actions += '</div>';
+    }
+    return `
+      <div class="comment${hiddenClass}">
+        <span class="comment-dot" style="background:${c.author_color}"></span>
+        <div class="comment-content">
+          <span class="comment-author">${escapeHtml(c.author)}</span>${hiddenBadge}
+          <span class="comment-time">${escapeHtml(c.created_at)}</span>
+          <p class="comment-text">${escapeHtml(c.text)}</p>
+        </div>
+        ${actions}
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
   list.scrollTop = list.scrollHeight;
 }
 
@@ -412,10 +471,41 @@ async function submitComment() {
     });
     if (resp.ok) {
       const evResp = await fetch(`/api/group-events/${currentEventId}`);
-      if (evResp.ok) renderComments((await evResp.json()).comments);
+      if (evResp.ok) renderComments((await evResp.json()).comments, currentEventId);
     }
   } catch (err) {
     console.error('Comment error:', err);
+  }
+}
+
+async function deleteComment(eventId, commentId) {
+  if (!confirm('Slet denne kommentar?')) return;
+  try {
+    const resp = await fetch(`/api/group-events/${eventId}/comments/${commentId}`, {
+      method: 'DELETE',
+    });
+    if (resp.ok) {
+      const evResp = await fetch(`/api/group-events/${eventId}`);
+      if (evResp.ok) renderComments((await evResp.json()).comments, eventId);
+    }
+  } catch (err) {
+    console.error('Delete comment error:', err);
+  }
+}
+
+async function toggleHideComment(eventId, commentId, hidden) {
+  try {
+    const resp = await fetch(`/api/group-events/${eventId}/comments/${commentId}/hide`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ hidden }),
+    });
+    if (resp.ok) {
+      const evResp = await fetch(`/api/group-events/${eventId}`);
+      if (evResp.ok) renderComments((await evResp.json()).comments, eventId);
+    }
+  } catch (err) {
+    console.error('Hide comment error:', err);
   }
 }
 
@@ -447,16 +537,19 @@ async function loadUpcomingEvents() {
       return;
     }
     container.innerHTML = events.map(ev => {
-      const dateObj = new Date(ev.date + 'T12:00:00');
-      const formatted = dateObj.toLocaleDateString('da-DK', {
-        day: 'numeric', month: 'short', year: 'numeric',
-      });
+      const dateFmt = { day: 'numeric', month: 'short', year: 'numeric' };
+      const startObj = new Date(ev.date + 'T12:00:00');
+      let dateLabel = startObj.toLocaleDateString('da-DK', dateFmt);
+      if (ev.end_date && ev.end_date !== ev.date) {
+        const endObj = new Date(ev.end_date + 'T12:00:00');
+        dateLabel += ' — ' + endObj.toLocaleDateString('da-DK', dateFmt);
+      }
       const commentStr = ev.comment_count > 0
         ? ` · ${ev.comment_count} kommentar${ev.comment_count !== 1 ? 'er' : ''}`
         : '';
       return `
         <div class="event-item" onclick="showEventDetailModal(${ev.id})">
-          <div class="event-item-date">${escapeHtml(formatted)}</div>
+          <div class="event-item-date">${escapeHtml(dateLabel)}</div>
           <div class="event-item-title">${escapeHtml(ev.title)}</div>
           ${ev.description
             ? `<div class="event-item-desc">${escapeHtml(ev.description)}</div>`

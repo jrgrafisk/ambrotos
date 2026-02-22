@@ -93,8 +93,8 @@ Admin users can manage all users at `/admin`.
 - **Models**:
   - `User` (id, username, password_hash, color, is_admin)
   - `UnavailableDate` (user_id, date, created_at) — unique constraint per user/date
-  - `GroupEvent` (id, title, description, date, created_by, created_at)
-  - `EventComment` (event_id, user_id, text, created_at)
+  - `GroupEvent` (id, title, description, date, end_date, created_by, created_at) — supports multi-day events
+  - `EventComment` (event_id, user_id, text, is_hidden, created_at)
 - **`init_db()`**: Called on startup; creates tables, restores from backup if available, seeds default users if DB is empty.
 - **`parse_dates_from_message(message)`**: Extracts `date` objects from Danish natural-language strings using regex patterns and `dateparser`. Supports patterns like `"alle mandage i maj"`, `"fra 1. til 5. april"`, and arbitrary day lists.
 - **`write_backup()`**: Serialises all DB data to `data/calendar_backup.json` and optionally pushes to FTP in a background thread. Called after every write operation.
@@ -113,10 +113,13 @@ Admin users can manage all users at `/admin`.
 | POST | `/api/chat` | Parse Danish date message; add/remove unavailable dates for current user |
 | POST | `/api/unavailable/toggle` | Toggle a single date as unavailable for current user |
 | GET | `/api/group-events` | Upcoming group events (next 6 months) |
-| POST | `/api/group-events` | Create a group event |
+| POST | `/api/group-events` | Create a group event (supports end_date for multi-day) |
 | GET | `/api/group-events/<id>` | Event detail with attendance and comments |
-| DELETE | `/api/group-events/<id>` | Delete own event |
+| PUT | `/api/group-events/<id>` | Edit event (creator + admin) |
+| DELETE | `/api/group-events/<id>` | Delete event (creator + admin) |
 | POST | `/api/group-events/<id>/comments` | Add comment to event |
+| DELETE | `/api/group-events/<id>/comments/<cid>` | Delete own comment |
+| PUT | `/api/group-events/<id>/comments/<cid>/hide` | Hide/unhide comment (admin only) |
 | GET | `/api/admin/users` | List all users (admin only) |
 | POST | `/api/admin/users` | Create user (admin only) |
 | PUT | `/api/admin/users/<id>` | Update user (admin only) |

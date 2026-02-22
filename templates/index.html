@@ -79,11 +79,11 @@
   </div>
 </div>
 
-<!-- ── Event create modal ──────────────────────────────────────────── -->
+<!-- ── Event create/edit modal ─────────────────────────────────────── -->
 <div class="modal-overlay" id="eventCreateOverlay" style="display:none" role="dialog" aria-modal="true">
   <div class="modal">
     <div class="modal-header">
-      <h3 id="eventCreateDate">Nyt event</h3>
+      <h3 id="eventCreateHeading">Nyt event</h3>
       <button class="modal-close" onclick="closeEventCreateModal()" aria-label="Luk">&times;</button>
     </div>
     <div class="modal-body">
@@ -95,8 +95,18 @@
         <label for="eventDesc">Beskrivelse (valgfri)</label>
         <textarea id="eventDesc" rows="3" placeholder="Kort beskrivelse…"></textarea>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="eventStartDate">Fra</label>
+          <input type="date" id="eventStartDate">
+        </div>
+        <div class="form-group">
+          <label for="eventEndDate">Til (valgfri)</label>
+          <input type="date" id="eventEndDate">
+        </div>
+      </div>
       <div class="modal-actions">
-        <button class="btn btn-primary btn-full" onclick="submitEventCreate()">Opret event</button>
+        <button class="btn btn-primary btn-full" id="eventSubmitBtn" onclick="submitEventCreate()">Opret event</button>
       </div>
     </div>
   </div>
@@ -129,6 +139,10 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+  const CURRENT_USER_ID = {{ current_user.id }};
+  const IS_ADMIN = {{ current_user.is_admin|tojson }};
+</script>
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/locales-all.global.min.js"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
