@@ -88,6 +88,7 @@
           <td class="stat-cell stat-muted">{{ stats[u.id].unavail_days }}</td>
           <td class="action-cell">
             <button class="btn btn-outline btn-sm" onclick="openEditModal({{ u.id }}, '{{ u.username }}', '{{ u.color }}', {{ u.is_admin|tojson }})">Rediger</button>
+            <button class="btn btn-outline btn-sm" onclick="generateResetLink({{ u.id }}, '{{ u.username }}')">Reset link</button>
             {% if u.id != current_user.id %}
             <button class="btn btn-sm btn-danger" onclick="deleteUser({{ u.id }}, '{{ u.username }}')">Slet</button>
             {% endif %}
@@ -183,6 +184,24 @@
       <div class="modal-actions">
         <button class="btn btn-primary btn-full" onclick="submitEdit()">Gem ændringer</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Reset link modal ───────────────────────────────────────── -->
+<div class="modal-overlay" id="resetLinkOverlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="resetLinkTitle">Reset link</h3>
+      <button class="modal-close" onclick="closeResetLinkModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-bottom:8px;color:var(--text-muted);font-size:0.9em">Send dette link til brugeren. Det udløber om 24 timer og kan kun bruges én gang.</p>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="resetLinkInput" readonly style="flex:1;font-size:0.85em;font-family:monospace">
+        <button class="btn btn-primary btn-sm" onclick="copyResetLink()">Kopiér</button>
+      </div>
+      <p id="resetLinkCopied" style="color:var(--success,#16a34a);font-size:0.85em;margin-top:6px;display:none">Kopieret!</p>
     </div>
   </div>
 </div>
@@ -457,10 +476,37 @@ async function deleteUser(id, name) {
   location.reload();
 }
 
+/* ── Reset link ─────────────────────────────────── */
+async function generateResetLink(userId, username) {
+  const resp = await fetch(`/api/admin/users/${userId}/reset-token`, { method: 'POST' });
+  const data = await resp.json();
+  if (!resp.ok) { alert(data.error || 'Fejl ved generering af reset link'); return; }
+  document.getElementById('resetLinkTitle').textContent = `Reset link – ${username}`;
+  document.getElementById('resetLinkInput').value = data.reset_url;
+  document.getElementById('resetLinkCopied').style.display = 'none';
+  document.getElementById('resetLinkOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('resetLinkInput').select(), 50);
+}
+
+function closeResetLinkModal() {
+  document.getElementById('resetLinkOverlay').style.display = 'none';
+}
+
+async function copyResetLink() {
+  const input = document.getElementById('resetLinkInput');
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch {
+    input.select();
+    document.execCommand('copy');
+  }
+  document.getElementById('resetLinkCopied').style.display = 'block';
+}
+
 /* ── Keyboard shortcuts ─────────────────────────── */
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    closeEditModal(); closeAddModal(); closeAddTeamModal(); closeTeamMembersModal();
+    closeEditModal(); closeAddModal(); closeAddTeamModal(); closeTeamMembersModal(); closeResetLinkModal();
   }
 });
 document.getElementById('editName').addEventListener('keydown', e => {

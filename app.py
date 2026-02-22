@@ -4,6 +4,7 @@ import json
 import ftplib
 import io
 import threading
+import secrets
 import calendar as cal_module
 from datetime import datetime, date, timedelta
 
@@ -306,6 +307,17 @@ class EventComment(db.Model):
     is_hidden = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     author = db.relationship('User')
+
+
+class PasswordResetToken(db.Model):
+    __tablename__ = 'password_reset_tokens'
+    id = db.Column(db.Integer, primary_key=True)
+    token = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user = db.relationship('User')
 
 
 @login_manager.user_loader
@@ -870,6 +882,34 @@ def logout():
     return redirect(url_for('login'))
 
 
+# ── Password reset ─────────────────────────────────────────────────────────────
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    prt = PasswordResetToken.query.filter_by(token=token, used=False).first()
+    if not prt or prt.expires_at < datetime.utcnow():
+        flash('Linket er ugyldigt eller udløbet.', 'error')
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        password = request.form.get('password', '').strip()
+        confirm  = request.form.get('confirm', '').strip()
+        if not password or len(password) < 4:
+            flash('Adgangskoden skal være mindst 4 tegn.', 'error')
+            return render_template('reset_password.html', token=token)
+        if password != confirm:
+            flash('Adgangskoderne er ikke ens.', 'error')
+            return render_template('reset_password.html', token=token)
+        prt.user.set_password(password)
+        prt.used = True
+        db.session.commit()
+        write_backup()
+        flash('Adgangskoden er skiftet. Log ind med din nye kode.', 'success')
+        return redirect(url_for('login'))
+
+    return render_template('reset_password.html', token=token, username=prt.user.username)
+
+
 # ── API ────────────────────────────────────────────────────────────────────────
 
 @app.route('/calendar.ics')
@@ -1383,6 +1423,29 @@ def admin_delete_user(user_id):
     db.session.commit()
     write_backup()
     return jsonify({'deleted': True})
+
+
+# ── Password reset admin endpoint ──────────────────────────────────────────────
+
+@app.route('/api/admin/users/<int:user_id>/reset-token', methods=['POST'])
+@login_required
+@admin_required
+def admin_generate_reset_token(user_id):
+    u = db.session.get(User, user_id)
+    if not u:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    # Invalidate any existing unused tokens for this user
+    PasswordResetToken.query.filter_by(user_id=user_id, used=False).update({'used': True})
+    token = secrets.token_urlsafe(32)
+    prt = PasswordResetToken(
+        token=token,
+        user_id=user_id,
+        expires_at=datetime.utcnow() + timedelta(hours=24),
+    )
+    db.session.add(prt)
+    db.session.commit()
+    reset_url = url_for('reset_password', token=token, _external=True)
+    return jsonify({'reset_url': reset_url, 'username': u.username})
 
 
 # ── Admin team management routes ────────────────────────────────────────────────
