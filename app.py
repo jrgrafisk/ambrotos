@@ -294,6 +294,16 @@ def write_backup():
         os.makedirs(os.path.dirname(BACKUP_FILE), exist_ok=True)
         payload = {
             'exported_at': datetime.utcnow().isoformat(),
+            'users': [
+                {
+                    'id': u.id,
+                    'username': u.username,
+                    'password_hash': u.password_hash,
+                    'color': u.color,
+                    'is_admin': u.is_admin,
+                }
+                for u in User.query.order_by(User.id).all()
+            ],
             'unavailable_dates': [
                 {'user_id': ud.user_id, 'date': ud.date.isoformat()}
                 for ud in UnavailableDate.query.all()
@@ -403,8 +413,24 @@ def restore_from_backup():
         with open(BACKUP_FILE, encoding='utf-8') as f:
             data = json.load(f)
 
-        valid_user_ids = {u.id for u in User.query.all()}
         restored_any = False
+
+        # Restore users first (other tables have foreign keys to users)
+        backup_users = data.get('users', [])
+        if User.query.count() == 0 and backup_users:
+            for item in backup_users:
+                u = User(
+                    id=item['id'],
+                    username=item['username'],
+                    password_hash=item['password_hash'],
+                    color=item['color'],
+                    is_admin=item.get('is_admin', True),
+                )
+                db.session.add(u)
+            db.session.flush()
+            restored_any = True
+
+        valid_user_ids = {u.id for u in User.query.all()}
 
         if UnavailableDate.query.count() == 0:
             for item in data.get('unavailable_dates', []):
@@ -912,6 +938,7 @@ def admin_create_user():
     u.set_password(password)
     db.session.add(u)
     db.session.commit()
+    write_backup()
     return jsonify({'id': u.id, 'username': u.username, 'color': u.color}), 201
 
 
@@ -938,6 +965,7 @@ def admin_update_user(user_id):
     if 'is_admin' in data:
         u.is_admin = bool(data['is_admin'])
     db.session.commit()
+    write_backup()
     return jsonify({'id': u.id, 'username': u.username, 'color': u.color, 'is_admin': u.is_admin})
 
 
@@ -961,26 +989,21 @@ def admin_delete_user(user_id):
 def init_db():
     with app.app_context():
         db.create_all()   # only creates tables that don't yet exist
-        password = '123'
+
+        # Try to restore from backup first (includes users if available)
+        restore_from_backup()
+
+        # Fallback: seed default users only if no users exist (fresh install, no backup)
         if User.query.count() == 0:
             for i, name in enumerate(MEMBER_NAMES):
                 user = User(username=name, color=MEMBER_COLORS[i], is_admin=True)
-                user.set_password(password)
+                user.set_password('123')
                 db.session.add(user)
             db.session.commit()
-            print(f"✓ Oprettet {len(MEMBER_NAMES)} brugere (alle er admins)")
-            restore_from_backup()
+            print(f"✓ Oprettet {len(MEMBER_NAMES)} standardbrugere (ingen backup fundet)")
         else:
             db_type = 'PostgreSQL' if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite'
             print(f"✓ Forbundet til {db_type} — {User.query.count()} brugere, data intakt")
-            restore_from_backup()
-            # Ensure all existing users have admin rights
-            updated = User.query.filter_by(is_admin=False).all()
-            if updated:
-                for u in updated:
-                    u.is_admin = True
-                db.session.commit()
-                print(f"  {len(updated)} bruger(e) opgraderet til admin")
 
 
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').
