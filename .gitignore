@@ -18,6 +18,10 @@ instance/
 *.db
 *.sqlite3
 
+# Live data — never overwrite with git checkout
+data/calendar_backup.json
+data/*.ftp_tmp
+
 # Editor
 .vscode/
 .idea/
