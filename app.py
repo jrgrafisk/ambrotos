@@ -444,13 +444,71 @@ def _download_backup_from_ftp():
         print(f'⚠ FTP download fejlede (kan forventes ved helt ny opsætning): {exc}')
 
 
+def _try_use_best_backup():
+    """Always try FTP. If both local and FTP backups exist, use the newer one."""
+    host = os.environ.get('FTP_HOST', '')
+    user = os.environ.get('FTP_USER', '')
+    passwd = os.environ.get('FTP_PASS', '')
+    if not host or not user or not passwd:
+        return  # No FTP configured; use local file if it exists
+
+    # Read local backup timestamp if available
+    local_ts = None
+    if os.path.exists(BACKUP_FILE):
+        try:
+            with open(BACKUP_FILE, encoding='utf-8') as f:
+                local_data = json.load(f)
+            local_ts = local_data.get('exported_at', '')
+        except Exception:
+            pass
+
+    # Download FTP version to a temp location
+    ftp_file = BACKUP_FILE + '.ftp_tmp'
+    remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
+    try:
+        ftp = ftplib.FTP_TLS(host, timeout=30)
+        ftp.login(user, passwd)
+        ftp.prot_p()
+        ftp.cwd(remote_dir)
+        os.makedirs(os.path.dirname(BACKUP_FILE), exist_ok=True)
+        with open(ftp_file, 'wb') as f:
+            ftp.retrbinary('RETR calendar_backup.json', f.write)
+        ftp.quit()
+    except Exception as exc:
+        print(f'⚠ FTP download fejlede: {exc}')
+        # Clean up temp file if partial
+        if os.path.exists(ftp_file):
+            os.remove(ftp_file)
+        return
+
+    # Compare timestamps — use FTP version if newer
+    try:
+        with open(ftp_file, encoding='utf-8') as f:
+            ftp_data = json.load(f)
+        ftp_ts = ftp_data.get('exported_at', '')
+
+        if not local_ts or ftp_ts > local_ts:
+            # FTP is newer (or no local) — replace local
+            os.replace(ftp_file, BACKUP_FILE)
+            print(f'✓ FTP backup er nyere — bruger FTP version ({ftp_ts})')
+        else:
+            os.remove(ftp_file)
+            print(f'✓ Lokal backup er nyere — beholder lokal ({local_ts})')
+    except Exception as exc:
+        print(f'⚠ Kunne ikke sammenligne backups: {exc}')
+        # If comparison fails but FTP file exists and no local, use FTP
+        if not os.path.exists(BACKUP_FILE) and os.path.exists(ftp_file):
+            os.replace(ftp_file, BACKUP_FILE)
+        elif os.path.exists(ftp_file):
+            os.remove(ftp_file)
+
+
 def restore_from_backup():
     """Populate empty tables from the backup file.
     Runs on startup so a fresh DB after redeploy gets its data back.
-    Downloads from FTP first if no local file exists.
+    Always tries FTP and uses the newer backup (by exported_at timestamp).
     Handles both version 1 (single-team) and version 2 (multi-team) formats."""
-    if not os.path.exists(BACKUP_FILE):
-        _download_backup_from_ftp()
+    _try_use_best_backup()
     if not os.path.exists(BACKUP_FILE):
         return
     try:
@@ -1234,9 +1292,10 @@ def admin_panel():
     tid = team.id if team else None
     stats = {u.id: user_stats(u.id, tid) for u in users}
     teams = Team.query.order_by(Team.name).all()
+    teams_json = [{'id': t.id, 'name': t.name, 'description': t.description or ''} for t in teams]
     all_users = User.query.order_by(User.username).all()
     return render_template('admin.html', users=users, stats=stats, teams=teams,
-                           current_team=team, all_users=all_users)
+                           teams_json=teams_json, current_team=team, all_users=all_users)
 
 
 @app.route('/api/admin/users', methods=['GET'])

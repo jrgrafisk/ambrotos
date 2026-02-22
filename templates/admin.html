@@ -223,7 +223,7 @@
 
 {% block scripts %}
 <script>
-const ALL_TEAMS = {{ teams|tojson }};
+const ALL_TEAMS = {{ teams_json|tojson }};
 let currentTeamForMembers = null;
 
 /* ── Load team member counts ────────────────────── */
