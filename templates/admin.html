@@ -11,12 +11,13 @@
       <h1 class="admin-title">Admin{% if current_team %} – {{ current_team.name }}{% endif %}</h1>
     </div>
     <div style="display:flex;gap:8px">
-      <button class="btn btn-outline btn-sm" onclick="openAddTeamModal()">+ Nyt team</button>
+      {% if is_super_admin %}<button class="btn btn-outline btn-sm" onclick="openAddTeamModal()">+ Nyt team</button>{% endif %}
       <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Tilføj bruger</button>
     </div>
   </header>
 
-  <!-- ── Teams ──────────────────────────────────────────────────── -->
+  <!-- ── Teams (super-admin only) ─────────────────────────────── -->
+  {% if is_super_admin %}
   <div class="admin-card" style="margin-bottom:24px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h2 class="admin-section-title">Teams</h2>
@@ -51,6 +52,7 @@
       </tbody>
     </table>
   </div>
+  {% endif %}
 
   <!-- ── Users in current team ──────────────────────────────────── -->
   <div class="admin-card">
@@ -174,12 +176,14 @@
         <label for="editPassword">Ny adgangskode <span class="label-hint">(lad stå tom for at beholde)</span></label>
         <input type="password" id="editPassword" autocomplete="new-password" placeholder="Ny adgangskode…">
       </div>
+      {% if is_super_admin %}
       <div class="form-group form-check">
         <label>
           <input type="checkbox" id="editIsAdmin">
           Admin-rettigheder
         </label>
       </div>
+      {% endif %}
       <div id="editError" class="form-error" style="display:none"></div>
       <div class="modal-actions">
         <button class="btn btn-primary btn-full" onclick="submitEdit()">Gem ændringer</button>
@@ -243,6 +247,7 @@
 {% block scripts %}
 <script>
 const ALL_TEAMS = {{ teams_json|tojson }};
+const IS_SUPER_ADMIN = {{ is_super_admin|tojson }};
 let currentTeamForMembers = null;
 
 /* ── Load team member counts ────────────────────── */
@@ -385,7 +390,8 @@ function openEditModal(id, name, color, isAdmin) {
   document.getElementById('editColorPicker').value = color;
   document.getElementById('editColorText').value   = color;
   document.getElementById('editPassword').value = '';
-  document.getElementById('editIsAdmin').checked = isAdmin;
+  const isAdminEl = document.getElementById('editIsAdmin');
+  if (isAdminEl) isAdminEl.checked = isAdmin;
   document.getElementById('editError').style.display = 'none';
   document.getElementById('editOverlay').style.display = 'flex';
   setTimeout(() => document.getElementById('editName').focus(), 50);
@@ -400,11 +406,12 @@ async function submitEdit() {
   const username = document.getElementById('editName').value.trim();
   const color    = document.getElementById('editColorText').value.trim();
   const password = document.getElementById('editPassword').value;
-  const is_admin = document.getElementById('editIsAdmin').checked;
   const errEl    = document.getElementById('editError');
 
-  const body = { username, color, is_admin };
+  const body = { username, color };
   if (password) body.password = password;
+  const isAdminEl = document.getElementById('editIsAdmin');
+  if (isAdminEl) body.is_admin = isAdminEl.checked;
 
   const resp = await fetch(`/api/admin/users/${id}`, {
     method: 'PUT',

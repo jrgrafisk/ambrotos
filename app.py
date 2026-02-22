@@ -782,6 +782,29 @@ def team_admin_required(f):
     return decorated
 
 
+def _require_any_admin():
+    """Returnerer (is_super_admin: bool, team_id: int | None).
+    Afbryder med 403 hvis brugeren hverken er super-admin eller team-admin."""
+    if current_user.is_admin:
+        return True, get_current_team_id()
+    tid = get_current_team_id()
+    if tid and current_user.is_team_admin_for(tid):
+        return False, tid
+    from flask import abort
+    abort(403)
+
+
+def _can_manage_user(target_user_id):
+    """Returnerer True hvis den indloggede bruger må administrere target_user_id.
+    Super-admin: altid True. Team-admin: kun hvis target er i aktivt team."""
+    if current_user.is_admin:
+        return True
+    tid = get_current_team_id()
+    if not tid or not current_user.is_team_admin_for(tid):
+        return False
+    return UserTeam.query.filter_by(user_id=target_user_id, team_id=tid).first() is not None
+
+
 def user_stats(user_id: int, team_id: int = None) -> dict:
     """Compute 12-month stats for a user, optionally scoped to a team."""
     cutoff = date.today() - timedelta(days=365)
@@ -1324,35 +1347,31 @@ def hide_event_comment(event_id, comment_id):
 @app.route('/admin')
 @login_required
 def admin_panel():
-    if not current_user.is_admin:
-        flash('Ingen adgang.', 'error')
-        return redirect(url_for('index'))
+    is_super, tid = _require_any_admin()  # aborts 403 if no admin rights
     team = get_current_team()
-    if team:
-        team_user_ids = [ut.user_id for ut in UserTeam.query.filter_by(team_id=team.id).all()]
+    if tid:
+        team_user_ids = [ut.user_id for ut in UserTeam.query.filter_by(team_id=tid).all()]
         users = User.query.filter(User.id.in_(team_user_ids)).order_by(User.id).all()
     else:
         users = User.query.order_by(User.id).all()
-    tid = team.id if team else None
     stats = {u.id: user_stats(u.id, tid) for u in users}
-    teams = Team.query.order_by(Team.name).all()
+    teams = Team.query.order_by(Team.name).all() if is_super else []
     teams_json = [{'id': t.id, 'name': t.name, 'description': t.description or ''} for t in teams]
-    all_users = User.query.order_by(User.username).all()
+    all_users = User.query.order_by(User.username).all() if is_super else []
     return render_template('admin.html', users=users, stats=stats, teams=teams,
-                           teams_json=teams_json, current_team=team, all_users=all_users)
+                           teams_json=teams_json, current_team=team, all_users=all_users,
+                           is_super_admin=is_super)
 
 
 @app.route('/api/admin/users', methods=['GET'])
 @login_required
-@admin_required
 def admin_list_users():
-    team = get_current_team()
-    if team:
-        team_user_ids = [ut.user_id for ut in UserTeam.query.filter_by(team_id=team.id).all()]
+    is_super, tid = _require_any_admin()
+    if tid:
+        team_user_ids = [ut.user_id for ut in UserTeam.query.filter_by(team_id=tid).all()]
         users = User.query.filter(User.id.in_(team_user_ids)).order_by(User.id).all()
     else:
         users = User.query.order_by(User.id).all()
-    tid = team.id if team else None
     return jsonify([{
         'id': u.id,
         'username': u.username,
@@ -1364,8 +1383,8 @@ def admin_list_users():
 
 @app.route('/api/admin/users', methods=['POST'])
 @login_required
-@admin_required
 def admin_create_user():
+    is_super, tid = _require_any_admin()
     data = request.get_json()
     username = data.get('username', '').strip()
     password = data.get('password', '').strip()
@@ -1378,8 +1397,6 @@ def admin_create_user():
     u.set_password(password)
     db.session.add(u)
     db.session.flush()
-    # Add new user to current team if one is active
-    tid = get_current_team_id()
     if tid:
         db.session.add(UserTeam(user_id=u.id, team_id=tid, is_team_admin=False))
     db.session.commit()
@@ -1389,8 +1406,10 @@ def admin_create_user():
 
 @app.route('/api/admin/users/<int:user_id>', methods=['PUT'])
 @login_required
-@admin_required
 def admin_update_user(user_id):
+    is_super, _ = _require_any_admin()
+    if not _can_manage_user(user_id):
+        return jsonify({'error': 'Ingen adgang til denne bruger'}), 403
     u = db.session.get(User, user_id)
     if not u:
         return jsonify({'error': 'Ikke fundet'}), 404
@@ -1407,7 +1426,7 @@ def admin_update_user(user_id):
         u.color = data['color']
     if 'password' in data and data['password'].strip():
         u.set_password(data['password'].strip())
-    if 'is_admin' in data:
+    if 'is_admin' in data and is_super:  # only super-admin can promote
         u.is_admin = bool(data['is_admin'])
     db.session.commit()
     write_backup()
@@ -1416,8 +1435,10 @@ def admin_update_user(user_id):
 
 @app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
 @login_required
-@admin_required
 def admin_delete_user(user_id):
+    _require_any_admin()
+    if not _can_manage_user(user_id):
+        return jsonify({'error': 'Ingen adgang til denne bruger'}), 403
     if user_id == current_user.id:
         return jsonify({'error': 'Du kan ikke slette din egen konto'}), 400
     u = db.session.get(User, user_id)
@@ -1433,8 +1454,10 @@ def admin_delete_user(user_id):
 
 @app.route('/api/admin/users/<int:user_id>/reset-token', methods=['POST'])
 @login_required
-@admin_required
 def admin_generate_reset_token(user_id):
+    _require_any_admin()
+    if not _can_manage_user(user_id):
+        return jsonify({'error': 'Ingen adgang til denne bruger'}), 403
     u = db.session.get(User, user_id)
     if not u:
         return jsonify({'error': 'Ikke fundet'}), 404
