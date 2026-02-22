@@ -41,6 +41,8 @@ MEMBER_NAMES = [
     'Bjarne', 'Jakob', 'Mikkel', 'Johan', 'Martin Kjær',
 ]
 
+ADMIN_USERS = {'Kasper'}
+
 MEMBER_COLORS = [
     '#e53935', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa',
     '#00acc1', '#f4511e', '#3949ab', '#00897b', '#c0ca33',
@@ -439,7 +441,7 @@ def restore_from_backup():
             else:
                 # Old backup format without users — seed defaults so data can be restored
                 for i, name in enumerate(MEMBER_NAMES):
-                    user = User(username=name, color=MEMBER_COLORS[i], is_admin=True)
+                    user = User(username=name, color=MEMBER_COLORS[i], is_admin=(name in ADMIN_USERS))
                     user.set_password('123')
                     db.session.add(user)
                 db.session.flush()
@@ -1142,7 +1144,7 @@ def init_db():
         # Fallback: seed default users only if no users exist (fresh install, no backup)
         if User.query.count() == 0:
             for i, name in enumerate(MEMBER_NAMES):
-                user = User(username=name, color=MEMBER_COLORS[i], is_admin=True)
+                user = User(username=name, color=MEMBER_COLORS[i], is_admin=(name in ADMIN_USERS))
                 user.set_password('123')
                 db.session.add(user)
             db.session.commit()
