@@ -423,18 +423,28 @@ def restore_from_backup():
 
         # Restore users first (other tables have foreign keys to users)
         backup_users = data.get('users', [])
-        if User.query.count() == 0 and backup_users:
-            for item in backup_users:
-                u = User(
-                    id=item['id'],
-                    username=item['username'],
-                    password_hash=item['password_hash'],
-                    color=item['color'],
-                    is_admin=item.get('is_admin', True),
-                )
-                db.session.add(u)
-            db.session.flush()
-            restored_any = True
+        if User.query.count() == 0:
+            if backup_users:
+                for item in backup_users:
+                    u = User(
+                        id=item['id'],
+                        username=item['username'],
+                        password_hash=item['password_hash'],
+                        color=item['color'],
+                        is_admin=item.get('is_admin', True),
+                    )
+                    db.session.add(u)
+                db.session.flush()
+                restored_any = True
+            else:
+                # Old backup format without users — seed defaults so data can be restored
+                for i, name in enumerate(MEMBER_NAMES):
+                    user = User(username=name, color=MEMBER_COLORS[i], is_admin=True)
+                    user.set_password('123')
+                    db.session.add(user)
+                db.session.flush()
+                restored_any = True
+                print('⚠ Backup mangler brugere — standardbrugere oprettet')
 
         valid_user_ids = {u.id for u in User.query.all()}
 
@@ -483,6 +493,8 @@ def restore_from_backup():
         if restored_any:
             db.session.commit()
             print(f'✓ Data gendannet fra {BACKUP_FILE}')
+            # Re-write backup so it always has the latest format (including users)
+            write_backup()
     except Exception as exc:
         print(f'⚠ Backup restore fejlede: {exc}')
 
