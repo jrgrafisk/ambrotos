@@ -887,6 +887,40 @@ html, body {
   letter-spacing: 0.04em;
 }
 
+/* ── Team selector dropdown ──────────────────────────── */
+.team-selector {
+  position: relative;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 200;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 160px;
+  box-shadow: var(--shadow);
+  padding: 4px 0;
+}
+
+.dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.dropdown-item:hover { background: var(--primary-soft); }
+.dropdown-item.active { font-weight: 600; color: var(--primary); }
+
 /* Textarea in modals */
 .form-group textarea {
   width: 100%;
@@ -927,6 +961,8 @@ html, body {
 .admin-header-left { display: flex; align-items: center; gap: 16px; }
 
 .admin-title { font-size: 20px; font-weight: 700; color: var(--text); }
+.admin-section-title { font-size: 15px; font-weight: 600; color: var(--text); margin: 0; }
+.text-muted { color: var(--text-muted); font-size: 13px; }
 
 .admin-card {
   background: var(--card);

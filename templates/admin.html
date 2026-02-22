@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}Admin – Ambrotos{% endblock %}
+{% block title %}Admin – {% if current_team %}{{ current_team.name }}{% else %}Ambrotos{% endif %}{% endblock %}
 
 {% block content %}
 <div class="admin-layout">
@@ -8,13 +8,55 @@
   <header class="admin-header">
     <div class="admin-header-left">
       <a href="{{ url_for('index') }}" class="btn btn-outline btn-sm">← Kalender</a>
-      <h1 class="admin-title">Brugerstyring</h1>
+      <h1 class="admin-title">Admin{% if current_team %} – {{ current_team.name }}{% endif %}</h1>
     </div>
-    <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Tilføj bruger</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-outline btn-sm" onclick="openAddTeamModal()">+ Nyt team</button>
+      <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Tilføj bruger</button>
+    </div>
   </header>
 
-  <!-- ── Stats table ────────────────────────────────────────────── -->
+  <!-- ── Teams ──────────────────────────────────────────────────── -->
+  <div class="admin-card" style="margin-bottom:24px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 class="admin-section-title">Teams</h2>
+    </div>
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>Team</th>
+          <th>Beskrivelse</th>
+          <th>Medlemmer</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in teams %}
+        <tr>
+          <td>
+            <strong>{{ t.name }}</strong>
+            {% if current_team and t.id == current_team.id %}<span class="you-badge">aktiv</span>{% endif %}
+          </td>
+          <td class="text-muted">{{ t.description or '–' }}</td>
+          <td class="stat-cell" id="member-count-{{ t.id }}">Indlæser…</td>
+          <td class="action-cell">
+            <button class="btn btn-outline btn-sm" onclick="openTeamMembersModal({{ t.id }}, '{{ t.name }}')">Medlemmer</button>
+            <button class="btn btn-outline btn-sm" onclick="openEditTeamModal({{ t.id }}, '{{ t.name }}', '{{ t.description or '' }}')">Rediger</button>
+            {% if teams|length > 1 %}
+            <button class="btn btn-sm btn-danger" onclick="deleteTeam({{ t.id }}, '{{ t.name }}')">Slet</button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Users in current team ──────────────────────────────────── -->
   <div class="admin-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 class="admin-section-title">Brugere{% if current_team %} i {{ current_team.name }}{% endif %}</h2>
+    </div>
     <table class="admin-table" id="userTable">
       <thead>
         <tr>
@@ -33,7 +75,7 @@
           <td class="user-cell">
             <span class="table-dot" style="background:{{ u.color }}"></span>
             <span class="user-name-cell">{{ u.username }}</span>
-            {% if u.is_admin %}<span class="admin-badge">admin</span>{% endif %}
+            {% if u.is_admin %}<span class="admin-badge">super-admin</span>{% endif %}
             {% if u.id == current_user.id %}<span class="you-badge">dig</span>{% endif %}
           </td>
           <td>
@@ -54,6 +96,55 @@
         {% endfor %}
       </tbody>
     </table>
+  </div>
+</div>
+
+<!-- ── Team members modal ──────────────────────────────────────── -->
+<div class="modal-overlay" id="teamMembersOverlay" style="display:none">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3 id="teamMembersTitle">Teammers</h3>
+      <button class="modal-close" onclick="closeTeamMembersModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="teamMembersList"></div>
+      <div class="form-group" style="margin-top:16px">
+        <label>Tilføj bruger til team</label>
+        <div style="display:flex;gap:8px">
+          <select id="addMemberSelect" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border)">
+            {% for u in all_users %}
+            <option value="{{ u.id }}">{{ u.username }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="addMemberToTeam()">Tilføj</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add team modal ──────────────────────────────────────────── -->
+<div class="modal-overlay" id="addTeamOverlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="addTeamTitle">Nyt team</h3>
+      <button class="modal-close" onclick="closeAddTeamModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editTeamId">
+      <div class="form-group">
+        <label for="teamName">Teamnavn</label>
+        <input type="text" id="teamName" autocomplete="off" placeholder="Fx Ambrotos, Cykelklub…">
+      </div>
+      <div class="form-group">
+        <label for="teamDesc">Beskrivelse (valgfri)</label>
+        <input type="text" id="teamDesc" autocomplete="off" placeholder="Kort beskrivelse…">
+      </div>
+      <div id="teamError" class="form-error" style="display:none"></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary btn-full" id="teamSubmitBtn" onclick="submitTeam()">Opret team</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -132,6 +223,142 @@
 
 {% block scripts %}
 <script>
+const ALL_TEAMS = {{ teams|tojson }};
+let currentTeamForMembers = null;
+
+/* ── Load team member counts ────────────────────── */
+async function loadTeamMemberCounts() {
+  for (const t of ALL_TEAMS) {
+    try {
+      const resp = await fetch(`/api/admin/teams/${t.id}/members`);
+      if (resp.ok) {
+        const members = await resp.json();
+        const el = document.getElementById(`member-count-${t.id}`);
+        if (el) el.textContent = members.length;
+      }
+    } catch (e) {}
+  }
+}
+loadTeamMemberCounts();
+
+/* ── Team members modal ─────────────────────────── */
+async function openTeamMembersModal(teamId, teamName) {
+  currentTeamForMembers = teamId;
+  document.getElementById('teamMembersTitle').textContent = `Medlemmer – ${teamName}`;
+  await refreshTeamMembersList();
+  document.getElementById('teamMembersOverlay').style.display = 'flex';
+}
+
+function closeTeamMembersModal() {
+  document.getElementById('teamMembersOverlay').style.display = 'none';
+  currentTeamForMembers = null;
+  loadTeamMemberCounts();
+}
+
+async function refreshTeamMembersList() {
+  const resp = await fetch(`/api/admin/teams/${currentTeamForMembers}/members`);
+  const members = await resp.json();
+  const list = document.getElementById('teamMembersList');
+  if (members.length === 0) {
+    list.innerHTML = '<p style="color:var(--text-muted)">Ingen medlemmer endnu.</p>';
+    return;
+  }
+  list.innerHTML = members.map(m => `
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+      <span style="width:12px;height:12px;border-radius:50%;background:${m.color};display:inline-block"></span>
+      <span style="flex:1">${escapeHtml(m.username)}${m.is_team_admin ? ' <span class="admin-badge">team-admin</span>' : ''}</span>
+      <button class="btn btn-outline btn-sm" onclick="toggleTeamAdmin(${m.user_id}, ${!m.is_team_admin})">
+        ${m.is_team_admin ? 'Fjern admin' : 'Gør til admin'}
+      </button>
+      <button class="btn btn-sm btn-danger" onclick="removeMemberFromTeam(${m.user_id})">Fjern</button>
+    </div>
+  `).join('');
+}
+
+async function addMemberToTeam() {
+  const userId = document.getElementById('addMemberSelect').value;
+  const resp = await fetch(`/api/admin/teams/${currentTeamForMembers}/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: parseInt(userId) }),
+  });
+  if (resp.ok) await refreshTeamMembersList();
+  else { const d = await resp.json(); alert(d.error); }
+}
+
+async function removeMemberFromTeam(userId) {
+  if (!confirm('Fjern bruger fra dette team?')) return;
+  const resp = await fetch(`/api/admin/teams/${currentTeamForMembers}/members/${userId}`, {
+    method: 'DELETE',
+  });
+  if (resp.ok) await refreshTeamMembersList();
+}
+
+async function toggleTeamAdmin(userId, makeAdmin) {
+  const resp = await fetch(`/api/admin/teams/${currentTeamForMembers}/members/${userId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_team_admin: makeAdmin }),
+  });
+  if (resp.ok) await refreshTeamMembersList();
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
+}
+
+/* ── Add/Edit team modal ─────────────────────────── */
+function openAddTeamModal() {
+  document.getElementById('addTeamTitle').textContent = 'Nyt team';
+  document.getElementById('editTeamId').value = '';
+  document.getElementById('teamName').value = '';
+  document.getElementById('teamDesc').value = '';
+  document.getElementById('teamSubmitBtn').textContent = 'Opret team';
+  document.getElementById('teamError').style.display = 'none';
+  document.getElementById('addTeamOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('teamName').focus(), 50);
+}
+
+function openEditTeamModal(id, name, desc) {
+  document.getElementById('addTeamTitle').textContent = 'Rediger team';
+  document.getElementById('editTeamId').value = id;
+  document.getElementById('teamName').value = name;
+  document.getElementById('teamDesc').value = desc;
+  document.getElementById('teamSubmitBtn').textContent = 'Gem ændringer';
+  document.getElementById('teamError').style.display = 'none';
+  document.getElementById('addTeamOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('teamName').focus(), 50);
+}
+
+function closeAddTeamModal() {
+  document.getElementById('addTeamOverlay').style.display = 'none';
+}
+
+async function submitTeam() {
+  const id   = document.getElementById('editTeamId').value;
+  const name = document.getElementById('teamName').value.trim();
+  const desc = document.getElementById('teamDesc').value.trim();
+  const errEl = document.getElementById('teamError');
+  const url  = id ? `/api/admin/teams/${id}` : '/api/admin/teams';
+  const resp = await fetch(url, {
+    method:  id ? 'PUT' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ name, description: desc }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) { errEl.textContent = data.error; errEl.style.display = 'block'; return; }
+  closeAddTeamModal();
+  location.reload();
+}
+
+async function deleteTeam(id, name) {
+  if (!confirm(`Slet team "${name}"? Alle events og markerede datoer i dette team slettes også.`)) return;
+  const resp = await fetch(`/api/admin/teams/${id}`, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!resp.ok) { alert(data.error); return; }
+  location.reload();
+}
+
 /* ── Edit modal ─────────────────────────────────── */
 function openEditModal(id, name, color, isAdmin) {
   document.getElementById('editUserId').value   = id;
@@ -232,7 +459,9 @@ async function deleteUser(id, name) {
 
 /* ── Keyboard shortcuts ─────────────────────────── */
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeEditModal(); closeAddModal(); }
+  if (e.key === 'Escape') {
+    closeEditModal(); closeAddModal(); closeAddTeamModal(); closeTeamMembersModal();
+  }
 });
 document.getElementById('editName').addEventListener('keydown', e => {
   if (e.key === 'Enter') submitEdit();

@@ -11,8 +11,23 @@
 
   <!-- ── Navigation ─────────────────────────────────────────────────── -->
   <nav class="navbar">
-    <div class="navbar-brand">📅 Ambrotos Kalender</div>
+    <div class="navbar-brand">📅 {% if current_team %}{{ current_team.name }}{% else %}Ambrotos{% endif %} Kalender</div>
     <div class="navbar-user">
+      {% if user_teams|length > 1 or current_user.is_admin %}
+      <div class="team-selector" id="teamSelector">
+        <button class="btn btn-sm btn-outline" id="teamDropdownBtn" onclick="toggleTeamDropdown()">
+          {% if current_team %}{{ current_team.name }}{% else %}Vælg team{% endif %} ▾
+        </button>
+        <div class="dropdown-menu" id="teamDropdownMenu" style="display:none">
+          {% for team in user_teams %}
+          <button class="dropdown-item {% if current_team and team.id == current_team.id %}active{% endif %}"
+                  onclick="switchTeam({{ team.id }})">
+            {{ team.name }}
+          </button>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
       <span class="user-dot" style="background: {{ current_user.color }}"></span>
       <span class="user-name">{{ current_user.username }}</span>
       {% if current_user.is_admin %}
@@ -142,6 +157,9 @@
 <script>
   const CURRENT_USER_ID = {{ current_user.id }};
   const IS_ADMIN = {{ current_user.is_admin|tojson }};
+  const IS_TEAM_ADMIN = {{ is_team_admin|tojson }};
+  const CURRENT_TEAM_ID = {{ current_team.id if current_team else 'null' }};
+  const CURRENT_TEAM_NAME = {{ (current_team.name if current_team else 'Ambrotos')|tojson }};
 </script>
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/locales-all.global.min.js"></script>

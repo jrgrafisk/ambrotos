@@ -9,7 +9,7 @@ from datetime import datetime, date, timedelta
 
 from sqlalchemy import text as sa_text, inspect as sa_inspect
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -226,13 +226,29 @@ def format_dates_danish(date_strings: list) -> str:
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 
+class Team(db.Model):
+    __tablename__ = 'teams'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(80), unique=True, nullable=False)
+    description = db.Column(db.Text, default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class UserTeam(db.Model):
+    __tablename__ = 'user_teams'
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)
+    team_id = db.Column(db.Integer, db.ForeignKey('teams.id', ondelete='CASCADE'), primary_key=True)
+    is_team_admin = db.Column(db.Boolean, nullable=False, default=False)
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     color = db.Column(db.String(7), nullable=False, default='#1e88e5')
-    is_admin = db.Column(db.Boolean, nullable=False, default=True)
+    is_admin = db.Column(db.Boolean, nullable=False, default=False)
     unavailable_dates = db.relationship(
         'UnavailableDate', backref='user', lazy=True, cascade='all, delete-orphan'
     )
@@ -243,11 +259,19 @@ class User(UserMixin, db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
+    def is_team_admin_for(self, team_id: int) -> bool:
+        """Returnerer True hvis brugeren er team-admin ELLER global super-admin."""
+        if self.is_admin:
+            return True
+        ut = UserTeam.query.filter_by(user_id=self.id, team_id=team_id).first()
+        return ut.is_team_admin if ut else False
+
 
 class UnavailableDate(db.Model):
     __tablename__ = 'unavailable_dates'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    team_id = db.Column(db.Integer, db.ForeignKey('teams.id'), nullable=True)
     date = db.Column(db.Date, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -259,6 +283,7 @@ class UnavailableDate(db.Model):
 class GroupEvent(db.Model):
     __tablename__ = 'group_events'
     id = db.Column(db.Integer, primary_key=True)
+    team_id = db.Column(db.Integer, db.ForeignKey('teams.id'), nullable=True)
     title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, default='')
     date = db.Column(db.Date, nullable=False)
@@ -294,12 +319,21 @@ BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', '
 
 
 def write_backup():
-    """Persist current calendar data to a git-tracked JSON file.
+    """Persist current calendar data to a git-tracked JSON file (version 2 format).
     Called after every write so a redeploy always finds the latest state."""
     try:
         os.makedirs(os.path.dirname(BACKUP_FILE), exist_ok=True)
         payload = {
+            'version': 2,
             'exported_at': datetime.utcnow().isoformat(),
+            'teams': [
+                {'id': t.id, 'name': t.name, 'description': t.description or ''}
+                for t in Team.query.order_by(Team.id).all()
+            ],
+            'user_teams': [
+                {'user_id': ut.user_id, 'team_id': ut.team_id, 'is_team_admin': ut.is_team_admin}
+                for ut in UserTeam.query.all()
+            ],
             'users': [
                 {
                     'id': u.id,
@@ -311,12 +345,13 @@ def write_backup():
                 for u in User.query.order_by(User.id).all()
             ],
             'unavailable_dates': [
-                {'user_id': ud.user_id, 'date': ud.date.isoformat()}
+                {'user_id': ud.user_id, 'team_id': ud.team_id, 'date': ud.date.isoformat()}
                 for ud in UnavailableDate.query.all()
             ],
             'group_events': [
                 {
                     'id': e.id,
+                    'team_id': e.team_id,
                     'title': e.title,
                     'description': e.description or '',
                     'date': e.date.isoformat(),
@@ -412,7 +447,8 @@ def _download_backup_from_ftp():
 def restore_from_backup():
     """Populate empty tables from the backup file.
     Runs on startup so a fresh DB after redeploy gets its data back.
-    Downloads from FTP first if no local file exists."""
+    Downloads from FTP first if no local file exists.
+    Handles both version 1 (single-team) and version 2 (multi-team) formats."""
     if not os.path.exists(BACKUP_FILE):
         _download_backup_from_ftp()
     if not os.path.exists(BACKUP_FILE):
@@ -421,9 +457,22 @@ def restore_from_backup():
         with open(BACKUP_FILE, encoding='utf-8') as f:
             data = json.load(f)
 
+        version = data.get('version', 1)
         restored_any = False
 
-        # Restore users first (other tables have foreign keys to users)
+        # ── Restore teams (version 2) ────────────────────────────────────────
+        if version >= 2 and Team.query.count() == 0:
+            team_id_map: dict[int, int] = {}
+            for item in data.get('teams', []):
+                t = Team(name=item['name'], description=item.get('description', ''))
+                db.session.add(t)
+                db.session.flush()
+                team_id_map[item['id']] = t.id
+            restored_any = bool(team_id_map)
+        else:
+            team_id_map = {t.id: t.id for t in Team.query.all()}
+
+        # ── Restore users ───────────────────────────────────────────────────
         backup_users = data.get('users', [])
         if User.query.count() == 0:
             if backup_users:
@@ -433,13 +482,13 @@ def restore_from_backup():
                         username=item['username'],
                         password_hash=item['password_hash'],
                         color=item['color'],
-                        is_admin=item.get('is_admin', True),
+                        is_admin=item.get('is_admin', False),
                     )
                     db.session.add(u)
                 db.session.flush()
                 restored_any = True
             else:
-                # Old backup format without users — seed defaults so data can be restored
+                # Old backup format without users — seed defaults
                 for i, name in enumerate(MEMBER_NAMES):
                     user = User(username=name, color=MEMBER_COLORS[i], is_admin=(name in ADMIN_USERS))
                     user.set_password('123')
@@ -450,23 +499,43 @@ def restore_from_backup():
 
         valid_user_ids = {u.id for u in User.query.all()}
 
-        if UnavailableDate.query.count() == 0:
-            for item in data.get('unavailable_dates', []):
-                if item['user_id'] in valid_user_ids:
-                    db.session.add(UnavailableDate(
+        # ── Restore user_teams (version 2) ──────────────────────────────────
+        if version >= 2 and UserTeam.query.count() == 0:
+            for item in data.get('user_teams', []):
+                new_tid = team_id_map.get(item['team_id'])
+                if new_tid and item['user_id'] in valid_user_ids:
+                    db.session.add(UserTeam(
                         user_id=item['user_id'],
-                        date=date.fromisoformat(item['date']),
+                        team_id=new_tid,
+                        is_team_admin=item.get('is_team_admin', False),
                     ))
             restored_any = True
 
-        # Restore events and build old-id → new-id map for comments
+        # ── Restore unavailable_dates ────────────────────────────────────────
+        if UnavailableDate.query.count() == 0:
+            for item in data.get('unavailable_dates', []):
+                if item['user_id'] not in valid_user_ids:
+                    continue
+                raw_tid = item.get('team_id')
+                new_tid = team_id_map.get(raw_tid) if raw_tid else None
+                db.session.add(UnavailableDate(
+                    user_id=item['user_id'],
+                    team_id=new_tid,
+                    date=date.fromisoformat(item['date']),
+                ))
+            restored_any = True
+
+        # ── Restore group_events (build old-id → new-id map for comments) ───
         id_map: dict[int, int] = {}
         if GroupEvent.query.count() == 0:
             for item in data.get('group_events', []):
                 if item['created_by'] not in valid_user_ids:
                     continue
+                raw_tid = item.get('team_id')
+                new_tid = team_id_map.get(raw_tid) if raw_tid else None
                 end_date_str = item.get('end_date')
                 ev = GroupEvent(
+                    team_id=new_tid,
                     title=item['title'],
                     description=item.get('description', ''),
                     date=date.fromisoformat(item['date']),
@@ -475,10 +544,11 @@ def restore_from_backup():
                     created_at=datetime.fromisoformat(item.get('created_at', datetime.utcnow().isoformat())),
                 )
                 db.session.add(ev)
-                db.session.flush()       # get auto-assigned id
+                db.session.flush()
                 id_map[item['id']] = ev.id
             restored_any = True
 
+        # ── Restore event_comments ───────────────────────────────────────────
         if EventComment.query.count() == 0 and id_map:
             for item in data.get('event_comments', []):
                 new_eid = id_map.get(item['event_id'])
@@ -494,9 +564,8 @@ def restore_from_backup():
 
         if restored_any:
             db.session.commit()
-            print(f'✓ Data gendannet fra {BACKUP_FILE}')
-            # Re-write backup so it always has the latest format (including users)
-            write_backup()
+            print(f'✓ Data gendannet fra {BACKUP_FILE} (format v{version})')
+            write_backup()  # Re-write to ensure latest format
     except Exception as exc:
         print(f'⚠ Backup restore fejlede: {exc}')
 
@@ -521,9 +590,10 @@ def _ics_fold(line: str) -> str:
     return '\r\n '.join(result)
 
 
-def generate_ics() -> str:
-    """Generate a RFC 5545 iCalendar string from current DB state."""
+def generate_ics(team=None) -> str:
+    """Generate a RFC 5545 iCalendar string from current DB state, scoped to a team."""
     now_stamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+    cal_name = team.name if team else 'Ambrotos'
 
     def vevent(uid, summary, dtstart, dtend, description='', categories=''):
         lines = [
@@ -544,14 +614,17 @@ def generate_ics() -> str:
     output = [
         'BEGIN:VCALENDAR',
         'VERSION:2.0',
-        'PRODID:-//Ambrotos//Fælles Kalender//DA',
+        f'PRODID:-//Ambrotos//{_ics_escape(cal_name)}//DA',
         'CALSCALE:GREGORIAN',
         'METHOD:PUBLISH',
-        'X-WR-CALNAME:Ambrotos',
+        f'X-WR-CALNAME:{_ics_escape(cal_name)}',
         'X-WR-TIMEZONE:Europe/Copenhagen',
     ]
 
-    for ev in GroupEvent.query.order_by(GroupEvent.date).all():
+    events_q = GroupEvent.query.order_by(GroupEvent.date)
+    if team:
+        events_q = events_q.filter_by(team_id=team.id)
+    for ev in events_q.all():
         last_day = ev.end_date if ev.end_date and ev.end_date > ev.date else ev.date
         nxt = (last_day + timedelta(days=1)).strftime('%Y%m%d')
         output += vevent(
@@ -563,7 +636,10 @@ def generate_ics() -> str:
             categories='GROUP-EVENT',
         )
 
-    for ud in UnavailableDate.query.join(User).order_by(UnavailableDate.date).all():
+    dates_q = UnavailableDate.query.join(User).order_by(UnavailableDate.date)
+    if team:
+        dates_q = dates_q.filter(UnavailableDate.team_id == team.id)
+    for ud in dates_q.all():
         nxt = (ud.date + timedelta(days=1)).strftime('%Y%m%d')
         output += vevent(
             uid=f'ambrotos-unavail-{ud.user_id}-{ud.date.isoformat()}@ambrotos',
@@ -581,7 +657,36 @@ def generate_ics() -> str:
 
 from functools import wraps
 
+
+def get_current_team_id():
+    """Henter aktivt team-id fra session. Auto-select første team hvis intet er valgt."""
+    if not current_user.is_authenticated:
+        return None
+    tid = session.get('current_team_id')
+    if tid:
+        # Valider at brugeren stadig er med i det team (eller er super-admin)
+        if current_user.is_admin or UserTeam.query.filter_by(user_id=current_user.id, team_id=tid).first():
+            return tid
+        session.pop('current_team_id', None)
+    # Auto-select: find brugerens første team
+    if current_user.is_admin:
+        t = Team.query.order_by(Team.id).first()
+    else:
+        ut = UserTeam.query.filter_by(user_id=current_user.id).order_by(UserTeam.joined_at).first()
+        t = db.session.get(Team, ut.team_id) if ut else None
+    if t:
+        session['current_team_id'] = t.id
+        return t.id
+    return None
+
+
+def get_current_team():
+    tid = get_current_team_id()
+    return db.session.get(Team, tid) if tid else None
+
+
 def admin_required(f):
+    """Kræver global super-admin rettighed (User.is_admin)."""
     @wraps(f)
     def decorated(*args, **kwargs):
         if not current_user.is_authenticated or not current_user.is_admin:
@@ -590,22 +695,40 @@ def admin_required(f):
     return decorated
 
 
-def user_stats(user_id: int) -> dict:
-    """Compute 12-month stats for a user."""
+def team_admin_required(f):
+    """Kræver team-admin rettighed (UserTeam.is_team_admin) eller super-admin for aktivt team."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return jsonify({'error': 'Ikke tilladt'}), 403
+        tid = get_current_team_id()
+        if not tid or not current_user.is_team_admin_for(tid):
+            return jsonify({'error': 'Kræver team-admin rettigheder'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+def user_stats(user_id: int, team_id: int = None) -> dict:
+    """Compute 12-month stats for a user, optionally scoped to a team."""
     cutoff = date.today() - timedelta(days=365)
-    recent_events = GroupEvent.query.filter(GroupEvent.date >= cutoff).all()
-    user_unavail = {
-        ud.date for ud in UnavailableDate.query.filter(
-            UnavailableDate.user_id == user_id,
-            UnavailableDate.date >= cutoff,
-        ).all()
-    }
+    events_q = GroupEvent.query.filter(GroupEvent.date >= cutoff)
+    unavail_q = UnavailableDate.query.filter(
+        UnavailableDate.user_id == user_id,
+        UnavailableDate.date >= cutoff,
+    )
+    created_q = GroupEvent.query.filter(
+        GroupEvent.created_by == user_id,
+        GroupEvent.date >= cutoff,
+    )
+    if team_id:
+        events_q = events_q.filter(GroupEvent.team_id == team_id)
+        unavail_q = unavail_q.filter(UnavailableDate.team_id == team_id)
+        created_q = created_q.filter(GroupEvent.team_id == team_id)
+    recent_events = events_q.all()
+    user_unavail = {ud.date for ud in unavail_q.all()}
     kan_ikke = sum(1 for e in recent_events if e.date in user_unavail)
     return {
-        'events_created': GroupEvent.query.filter(
-            GroupEvent.created_by == user_id,
-            GroupEvent.date >= cutoff,
-        ).count(),
+        'events_created': created_q.count(),
         'kan_deltage':    len(recent_events) - kan_ikke,
         'kan_ikke':       kan_ikke,
         'unavail_days':   len(user_unavail),
@@ -614,11 +737,52 @@ def user_stats(user_id: int) -> dict:
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
+@app.route('/select-team/<int:team_id>', methods=['POST'])
+@login_required
+def select_team(team_id):
+    ut = UserTeam.query.filter_by(user_id=current_user.id, team_id=team_id).first()
+    if not ut and not current_user.is_admin:
+        return jsonify({'error': 'Ingen adgang til dette team'}), 403
+    session['current_team_id'] = team_id
+    return jsonify({'team_id': team_id})
+
+
+@app.route('/api/teams')
+@login_required
+def list_user_teams():
+    if current_user.is_admin:
+        teams = Team.query.order_by(Team.name).all()
+    else:
+        team_ids = [ut.team_id for ut in UserTeam.query.filter_by(user_id=current_user.id).all()]
+        teams = Team.query.filter(Team.id.in_(team_ids)).order_by(Team.name).all()
+    current_tid = get_current_team_id()
+    return jsonify([{
+        'id': t.id,
+        'name': t.name,
+        'is_current': t.id == current_tid,
+    } for t in teams])
+
+
 @app.route('/')
 @login_required
 def index():
-    users = User.query.order_by(User.username).all()
-    return render_template('index.html', users=users)
+    team = get_current_team()
+    if not team:
+        flash('Ingen teams tilgængelige. Kontakt en administrator.', 'error')
+        return render_template('index.html', users=[], current_team=None, user_teams=[], is_team_admin=False)
+    team_user_ids = [ut.user_id for ut in UserTeam.query.filter_by(team_id=team.id).all()]
+    users = User.query.filter(User.id.in_(team_user_ids)).order_by(User.username).all()
+    if current_user.is_admin:
+        user_teams = Team.query.order_by(Team.name).all()
+    else:
+        ut_rows = UserTeam.query.filter_by(user_id=current_user.id).all()
+        user_teams = [db.session.get(Team, ut.team_id) for ut in ut_rows]
+    return render_template('index.html',
+        users=users,
+        current_team=team,
+        user_teams=user_teams,
+        is_team_admin=current_user.is_team_admin_for(team.id),
+    )
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -643,6 +807,7 @@ def login():
 @app.route('/logout')
 @login_required
 def logout():
+    session.pop('current_team_id', None)
     logout_user()
     return redirect(url_for('login'))
 
@@ -653,17 +818,22 @@ def logout():
 @login_required
 def serve_ics():
     from flask import Response
+    team = get_current_team()
+    filename = f"{team.name.lower().replace(' ', '_')}.ics" if team else 'ambrotos.ics'
     return Response(
-        generate_ics(),
+        generate_ics(team),
         mimetype='text/calendar; charset=utf-8',
-        headers={'Content-Disposition': 'inline; filename="ambrotos.ics"'},
+        headers={'Content-Disposition': f'inline; filename="{filename}"'},
     )
 
 
 @app.route('/api/events')
 @login_required
 def get_events():
-    all_dates = UnavailableDate.query.join(User).all()
+    team = get_current_team()
+    if not team:
+        return jsonify([])
+    all_dates = UnavailableDate.query.filter_by(team_id=team.id).join(User).all()
     events = []
     for d in all_dates:
         events.append({
@@ -698,7 +868,7 @@ def get_events():
             })
 
     # Add group events
-    for e in GroupEvent.query.all():
+    for e in GroupEvent.query.filter_by(team_id=team.id).all():
         ev_data = {
             'id': f"gevent-{e.id}",
             'title': e.title,
@@ -740,10 +910,14 @@ def chat():
             'added': [], 'deleted': [], 'already_exists': [], 'not_found': [],
         })
 
+    team = get_current_team()
+    if not team:
+        return jsonify({'error': 'Intet team valgt'}), 400
+
     added, deleted, already_exists, not_found = [], [], [], []
 
     for d in dates:
-        existing = UnavailableDate.query.filter_by(user_id=current_user.id, date=d).first()
+        existing = UnavailableDate.query.filter_by(user_id=current_user.id, team_id=team.id, date=d).first()
         if is_delete:
             if existing:
                 db.session.delete(existing)
@@ -754,7 +928,7 @@ def chat():
             if existing:
                 already_exists.append(d.isoformat())
             else:
-                db.session.add(UnavailableDate(user_id=current_user.id, date=d))
+                db.session.add(UnavailableDate(user_id=current_user.id, team_id=team.id, date=d))
                 added.append(d.isoformat())
 
     db.session.commit()
@@ -789,19 +963,22 @@ def chat():
 @app.route('/api/unavailable/toggle', methods=['POST'])
 @login_required
 def toggle_unavailable():
+    team = get_current_team()
+    if not team:
+        return jsonify({'error': 'Intet team valgt'}), 400
     data = request.get_json()
     date_str = data.get('date', '')
     try:
         d = date.fromisoformat(date_str)
     except (ValueError, TypeError):
         return jsonify({'error': 'Ugyldig dato'}), 400
-    existing = UnavailableDate.query.filter_by(user_id=current_user.id, date=d).first()
+    existing = UnavailableDate.query.filter_by(user_id=current_user.id, team_id=team.id, date=d).first()
     if existing:
         db.session.delete(existing)
         db.session.commit()
         write_backup()
         return jsonify({'action': 'removed', 'date': date_str})
-    db.session.add(UnavailableDate(user_id=current_user.id, date=d))
+    db.session.add(UnavailableDate(user_id=current_user.id, team_id=team.id, date=d))
     db.session.commit()
     write_backup()
     return jsonify({'action': 'added', 'date': date_str})
@@ -810,9 +987,13 @@ def toggle_unavailable():
 @app.route('/api/group-events', methods=['GET'])
 @login_required
 def list_group_events():
+    team = get_current_team()
+    if not team:
+        return jsonify([])
     today = date.today()
     cutoff = today + timedelta(days=183)
     events = GroupEvent.query.filter(
+        GroupEvent.team_id == team.id,
         db.or_(
             GroupEvent.date >= today,
             db.and_(GroupEvent.end_date.isnot(None), GroupEvent.end_date >= today),
@@ -853,7 +1034,11 @@ def create_group_event():
                 end_d = None
         except (ValueError, TypeError):
             pass
-    event = GroupEvent(title=title, description=description, date=d, end_date=end_d, created_by=current_user.id)
+    team = get_current_team()
+    if not team:
+        return jsonify({'error': 'Intet team valgt'}), 400
+    event = GroupEvent(title=title, description=description, date=d, end_date=end_d,
+                       created_by=current_user.id, team_id=team.id)
     db.session.add(event)
     db.session.commit()
     write_backup()
@@ -863,8 +1048,9 @@ def create_group_event():
 @app.route('/api/group-events/<int:event_id>', methods=['GET'])
 @login_required
 def get_group_event(event_id):
+    team = get_current_team()
     event = db.session.get(GroupEvent, event_id)
-    if not event:
+    if not event or (team and event.team_id != team.id):
         return jsonify({'error': 'Ikke fundet'}), 404
 
     # Collect all dates in the event range for attendance check
@@ -875,18 +1061,23 @@ def get_group_event(event_id):
         event_dates.add(d)
         d += timedelta(days=1)
 
-    unavailable_ids = {
-        ud.user_id for ud in UnavailableDate.query.filter(
-            UnavailableDate.date.in_(event_dates)
-        ).all()
-    }
-    all_users = User.query.order_by(User.id).all()
-    can_edit = event.created_by == current_user.id or current_user.is_admin
+    # Only users in this team count for attendance
+    team_user_ids = {ut.user_id for ut in UserTeam.query.filter_by(team_id=event.team_id).all()} if event.team_id else None
+    unavail_query = UnavailableDate.query.filter(UnavailableDate.date.in_(event_dates))
+    if event.team_id:
+        unavail_query = unavail_query.filter_by(team_id=event.team_id)
+    unavailable_ids = {ud.user_id for ud in unavail_query.all()}
+    if team_user_ids is not None:
+        all_users = User.query.filter(User.id.in_(team_user_ids)).order_by(User.id).all()
+    else:
+        all_users = User.query.order_by(User.id).all()
+    can_edit = event.created_by == current_user.id or current_user.is_team_admin_for(event.team_id or 0)
 
-    # Filter hidden comments for non-admins
+    # Filter hidden comments for non-team-admins
+    is_team_admin = current_user.is_team_admin_for(event.team_id or 0)
     comments = []
     for c in event.comments:
-        if c.is_hidden and not current_user.is_admin:
+        if c.is_hidden and not is_team_admin:
             continue
         comments.append({
             'id': c.id,
@@ -924,9 +1115,9 @@ def get_group_event(event_id):
 @login_required
 def delete_group_event(event_id):
     event = db.session.get(GroupEvent, event_id)
-    if not event:
+    if not event or (event.team_id and event.team_id != get_current_team_id()):
         return jsonify({'error': 'Ikke fundet'}), 404
-    if event.created_by != current_user.id and not current_user.is_admin:
+    if event.created_by != current_user.id and not current_user.is_team_admin_for(event.team_id or 0):
         return jsonify({'error': 'Ikke tilladt'}), 403
     db.session.delete(event)
     db.session.commit()
@@ -938,9 +1129,9 @@ def delete_group_event(event_id):
 @login_required
 def update_group_event(event_id):
     event = db.session.get(GroupEvent, event_id)
-    if not event:
+    if not event or (event.team_id and event.team_id != get_current_team_id()):
         return jsonify({'error': 'Ikke fundet'}), 404
-    if event.created_by != current_user.id and not current_user.is_admin:
+    if event.created_by != current_user.id and not current_user.is_team_admin_for(event.team_id or 0):
         return jsonify({'error': 'Ikke tilladt'}), 403
     data = request.get_json()
     if 'title' in data:
@@ -977,7 +1168,7 @@ def update_group_event(event_id):
 @login_required
 def add_event_comment(event_id):
     event = db.session.get(GroupEvent, event_id)
-    if not event:
+    if not event or (event.team_id and event.team_id != get_current_team_id()):
         return jsonify({'error': 'Ikke fundet'}), 404
     data = request.get_json()
     text = data.get('text', '').strip()
@@ -1014,7 +1205,7 @@ def delete_event_comment(event_id, comment_id):
 
 @app.route('/api/group-events/<int:event_id>/comments/<int:comment_id>/hide', methods=['PUT'])
 @login_required
-@admin_required
+@team_admin_required
 def hide_event_comment(event_id, comment_id):
     comment = db.session.get(EventComment, comment_id)
     if not comment or comment.event_id != event_id:
@@ -1034,22 +1225,37 @@ def admin_panel():
     if not current_user.is_admin:
         flash('Ingen adgang.', 'error')
         return redirect(url_for('index'))
-    users = User.query.order_by(User.id).all()
-    stats = {u.id: user_stats(u.id) for u in users}
-    return render_template('admin.html', users=users, stats=stats)
+    team = get_current_team()
+    if team:
+        team_user_ids = [ut.user_id for ut in UserTeam.query.filter_by(team_id=team.id).all()]
+        users = User.query.filter(User.id.in_(team_user_ids)).order_by(User.id).all()
+    else:
+        users = User.query.order_by(User.id).all()
+    tid = team.id if team else None
+    stats = {u.id: user_stats(u.id, tid) for u in users}
+    teams = Team.query.order_by(Team.name).all()
+    all_users = User.query.order_by(User.username).all()
+    return render_template('admin.html', users=users, stats=stats, teams=teams,
+                           current_team=team, all_users=all_users)
 
 
 @app.route('/api/admin/users', methods=['GET'])
 @login_required
 @admin_required
 def admin_list_users():
-    users = User.query.order_by(User.id).all()
+    team = get_current_team()
+    if team:
+        team_user_ids = [ut.user_id for ut in UserTeam.query.filter_by(team_id=team.id).all()]
+        users = User.query.filter(User.id.in_(team_user_ids)).order_by(User.id).all()
+    else:
+        users = User.query.order_by(User.id).all()
+    tid = team.id if team else None
     return jsonify([{
         'id': u.id,
         'username': u.username,
         'color': u.color,
         'is_admin': u.is_admin,
-        **user_stats(u.id),
+        **user_stats(u.id, tid),
     } for u in users])
 
 
@@ -1068,6 +1274,11 @@ def admin_create_user():
     u = User(username=username, color=color)
     u.set_password(password)
     db.session.add(u)
+    db.session.flush()
+    # Add new user to current team if one is active
+    tid = get_current_team_id()
+    if tid:
+        db.session.add(UserTeam(user_id=u.id, team_id=tid, is_team_admin=False))
     db.session.commit()
     write_backup()
     return jsonify({'id': u.id, 'username': u.username, 'color': u.color}), 201
@@ -1115,6 +1326,140 @@ def admin_delete_user(user_id):
     return jsonify({'deleted': True})
 
 
+# ── Admin team management routes ────────────────────────────────────────────────
+
+@app.route('/api/admin/teams', methods=['GET'])
+@login_required
+@admin_required
+def admin_list_teams():
+    teams = Team.query.order_by(Team.name).all()
+    return jsonify([{
+        'id': t.id,
+        'name': t.name,
+        'description': t.description,
+        'member_count': UserTeam.query.filter_by(team_id=t.id).count(),
+    } for t in teams])
+
+
+@app.route('/api/admin/teams', methods=['POST'])
+@login_required
+@admin_required
+def admin_create_team():
+    data = request.get_json()
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'error': 'Teamnavn er påkrævet'}), 400
+    if Team.query.filter_by(name=name).first():
+        return jsonify({'error': 'Teamnavn er allerede i brug'}), 400
+    t = Team(name=name, description=data.get('description', '').strip())
+    db.session.add(t)
+    db.session.commit()
+    write_backup()
+    return jsonify({'id': t.id, 'name': t.name}), 201
+
+
+@app.route('/api/admin/teams/<int:team_id>', methods=['PUT'])
+@login_required
+@admin_required
+def admin_update_team(team_id):
+    t = db.session.get(Team, team_id)
+    if not t:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    data = request.get_json()
+    if 'name' in data:
+        name = data['name'].strip()
+        if not name:
+            return jsonify({'error': 'Navn må ikke være tomt'}), 400
+        existing = Team.query.filter_by(name=name).first()
+        if existing and existing.id != team_id:
+            return jsonify({'error': 'Teamnavn er allerede i brug'}), 400
+        t.name = name
+    if 'description' in data:
+        t.description = data['description'].strip()
+    db.session.commit()
+    write_backup()
+    return jsonify({'id': t.id, 'name': t.name, 'description': t.description})
+
+
+@app.route('/api/admin/teams/<int:team_id>', methods=['DELETE'])
+@login_required
+@admin_required
+def admin_delete_team(team_id):
+    t = db.session.get(Team, team_id)
+    if not t:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    if Team.query.count() <= 1:
+        return jsonify({'error': 'Kan ikke slette det eneste team'}), 400
+    db.session.delete(t)
+    db.session.commit()
+    write_backup()
+    return jsonify({'deleted': True})
+
+
+@app.route('/api/admin/teams/<int:team_id>/members', methods=['GET'])
+@login_required
+@admin_required
+def admin_list_team_members(team_id):
+    t = db.session.get(Team, team_id)
+    if not t:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    members = UserTeam.query.filter_by(team_id=team_id).all()
+    return jsonify([{
+        'user_id': m.user_id,
+        'username': db.session.get(User, m.user_id).username,
+        'color': db.session.get(User, m.user_id).color,
+        'is_team_admin': m.is_team_admin,
+    } for m in members])
+
+
+@app.route('/api/admin/teams/<int:team_id>/members', methods=['POST'])
+@login_required
+@admin_required
+def admin_add_team_member(team_id):
+    t = db.session.get(Team, team_id)
+    if not t:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    data = request.get_json()
+    user_id = data.get('user_id')
+    u = db.session.get(User, user_id) if user_id else None
+    if not u:
+        return jsonify({'error': 'Bruger ikke fundet'}), 404
+    if UserTeam.query.filter_by(user_id=user_id, team_id=team_id).first():
+        return jsonify({'error': 'Bruger er allerede i dette team'}), 400
+    db.session.add(UserTeam(user_id=user_id, team_id=team_id,
+                             is_team_admin=bool(data.get('is_team_admin', False))))
+    db.session.commit()
+    write_backup()
+    return jsonify({'user_id': user_id, 'team_id': team_id}), 201
+
+
+@app.route('/api/admin/teams/<int:team_id>/members/<int:user_id>', methods=['DELETE'])
+@login_required
+@admin_required
+def admin_remove_team_member(team_id, user_id):
+    ut = UserTeam.query.filter_by(user_id=user_id, team_id=team_id).first()
+    if not ut:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    db.session.delete(ut)
+    db.session.commit()
+    write_backup()
+    return jsonify({'deleted': True})
+
+
+@app.route('/api/admin/teams/<int:team_id>/members/<int:user_id>', methods=['PUT'])
+@login_required
+@admin_required
+def admin_set_team_admin(team_id, user_id):
+    ut = UserTeam.query.filter_by(user_id=user_id, team_id=team_id).first()
+    if not ut:
+        return jsonify({'error': 'Ikke fundet'}), 404
+    data = request.get_json()
+    ut.is_team_admin = bool(data.get('is_team_admin', False))
+    db.session.commit()
+    write_backup()
+    return jsonify({'user_id': user_id, 'team_id': team_id, 'is_team_admin': ut.is_team_admin})
+
+
 # ── Database seed ──────────────────────────────────────────────────────────────
 
 def migrate_db():
@@ -1125,12 +1470,44 @@ def migrate_db():
             cols = {c['name'] for c in inspector.get_columns('group_events')}
             if 'end_date' not in cols:
                 conn.execute(sa_text("ALTER TABLE group_events ADD COLUMN end_date DATE"))
+            if 'team_id' not in cols:
+                conn.execute(sa_text("ALTER TABLE group_events ADD COLUMN team_id INTEGER REFERENCES teams(id)"))
         if inspector.has_table('event_comments'):
             cols = {c['name'] for c in inspector.get_columns('event_comments')}
             if 'is_hidden' not in cols:
                 conn.execute(sa_text(
                     "ALTER TABLE event_comments ADD COLUMN is_hidden BOOLEAN DEFAULT 0 NOT NULL"
                 ))
+        if inspector.has_table('unavailable_dates'):
+            cols = {c['name'] for c in inspector.get_columns('unavailable_dates')}
+            if 'team_id' not in cols:
+                conn.execute(sa_text("ALTER TABLE unavailable_dates ADD COLUMN team_id INTEGER REFERENCES teams(id)"))
+
+
+def _migrate_to_teams():
+    """Engangsmigration: tildel alle eksisterende rækker til et default 'Ambrotos' team."""
+    if Team.query.count() > 0:
+        return  # Already migrated
+    ambrotos = Team(name='Ambrotos', description='Standard team')
+    db.session.add(ambrotos)
+    db.session.flush()
+    for user in User.query.all():
+        if not UserTeam.query.filter_by(user_id=user.id, team_id=ambrotos.id).first():
+            db.session.add(UserTeam(
+                user_id=user.id,
+                team_id=ambrotos.id,
+                is_team_admin=user.is_admin,
+            ))
+    db.session.execute(
+        sa_text("UPDATE unavailable_dates SET team_id = :tid WHERE team_id IS NULL"),
+        {'tid': ambrotos.id},
+    )
+    db.session.execute(
+        sa_text("UPDATE group_events SET team_id = :tid WHERE team_id IS NULL"),
+        {'tid': ambrotos.id},
+    )
+    db.session.commit()
+    print('✓ Migreret til multi-team: Ambrotos team oprettet')
 
 
 def init_db():
@@ -1152,6 +1529,9 @@ def init_db():
         else:
             db_type = 'PostgreSQL' if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite'
             print(f"✓ Forbundet til {db_type} — {User.query.count()} brugere, data intakt")
+
+        # Migrate existing single-team data to multi-team structure
+        _migrate_to_teams()
 
 
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').

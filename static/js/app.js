@@ -432,9 +432,9 @@ function renderComments(comments, eventId) {
     const hiddenClass = c.is_hidden ? ' comment-hidden' : '';
     const hiddenBadge = c.is_hidden ? '<span class="comment-hidden-badge">skjult</span>' : '';
     let actions = '';
-    if (c.is_own || IS_ADMIN) {
+    if (c.is_own || IS_TEAM_ADMIN) {
       actions = '<div class="comment-actions">';
-      if (IS_ADMIN) {
+      if (IS_TEAM_ADMIN) {
         const hideLabel = c.is_hidden ? 'Vis' : 'Skjul';
         actions += `<button class="comment-action-btn" onclick="toggleHideComment(${eventId}, ${c.id}, ${!c.is_hidden})">${hideLabel}</button>`;
       }
@@ -565,6 +565,32 @@ async function loadUpcomingEvents() {
     container.innerHTML = '<p class="events-empty">Kunne ikke indlæse events.</p>';
   }
 }
+
+/* ── Team selector ───────────────────────────────────── */
+
+function toggleTeamDropdown() {
+  const menu = document.getElementById('teamDropdownMenu');
+  if (!menu) return;
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+
+async function switchTeam(teamId) {
+  try {
+    await fetch(`/select-team/${teamId}`, { method: 'POST' });
+    window.location.reload();
+  } catch (err) {
+    console.error('Switch team error:', err);
+  }
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e => {
+  const selector = document.getElementById('teamSelector');
+  if (selector && !selector.contains(e.target)) {
+    const menu = document.getElementById('teamDropdownMenu');
+    if (menu) menu.style.display = 'none';
+  }
+});
 
 /* ── Utilities ───────────────────────────────────────── */
 
