@@ -422,8 +422,9 @@ def _push_backup_to_ftp():
         _ftp_ensure_dir(ftp, remote_dir)
         ftp.storbinary('STOR calendar_backup.json', io.BytesIO(file_data))
         ftp.quit()
+        print(f'✓ Backup pushed til FTP ({host}:{remote_dir}/calendar_backup.json)')
     except Exception as exc:
-        print(f'⚠ FTP upload failed: {exc}')
+        print(f'⚠ FTP upload failed ({host}:{remote_dir}): {exc}')
 
 
 def push_backup_to_ftp():
@@ -453,7 +454,7 @@ def _download_backup_from_ftp():
         ftp.quit()
         print(f'✓ Backup hentet fra FTP ({host}{remote_dir}/calendar_backup.json)')
     except Exception as exc:
-        print(f'⚠ FTP download fejlede (kan forventes ved helt ny opsætning): {exc}')
+        print(f'⚠ FTP download fejlede ({host}:{remote_dir}): {exc}')
 
 
 def _try_use_best_backup():
@@ -462,7 +463,11 @@ def _try_use_best_backup():
     user = os.environ.get('FTP_USER', '')
     passwd = os.environ.get('FTP_PASS', '')
     if not host or not user or not passwd:
-        return  # No FTP configured; use local file if it exists
+        print('ℹ FTP ikke konfigureret — bruger kun lokal backup')
+        return
+
+    remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
+    print(f'ℹ Forsøger FTP backup fra {host}:{remote_dir}/calendar_backup.json')
 
     # Read local backup timestamp if available
     local_ts = None
@@ -476,7 +481,6 @@ def _try_use_best_backup():
 
     # Download FTP version to a temp location
     ftp_file = BACKUP_FILE + '.ftp_tmp'
-    remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
     try:
         ftp = ftplib.FTP_TLS(host, timeout=30)
         ftp.login(user, passwd)
@@ -487,7 +491,7 @@ def _try_use_best_backup():
             ftp.retrbinary('RETR calendar_backup.json', f.write)
         ftp.quit()
     except Exception as exc:
-        print(f'⚠ FTP download fejlede: {exc}')
+        print(f'⚠ FTP download fejlede ({host}:{remote_dir}): {exc}')
         # Clean up temp file if partial
         if os.path.exists(ftp_file):
             os.remove(ftp_file)
