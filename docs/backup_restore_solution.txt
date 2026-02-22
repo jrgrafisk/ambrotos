@@ -1,0 +1,109 @@
+# Sikker Backup & Gendannelse: Undgå Overskrivning af Data
+
+Dette dokument beskriver den tekniske løsning for at undgå, at data i databasen eller backup-filen (`calendar_backup.json`) overskrives ved opdatering eller redeploy.
+
+---
+
+## Problemkontekst
+
+Ved opstart af applikationen blev `restore_from_backup()` kaldt, hvilket resulterede i, at kalenderdata blev gendannet fra backup-filen **uanset om databasen allerede indeholdt data**. Dette medførte, at eksisterende data (f.eks. brugere, events, kommentarer) kunne blive overskrevet ved redeploy, hvis backup-filen ikke var opdateret.
+
+---
+
+## Løsningens Kerne
+
+### 1. Tjek om databasen er tom
+
+Før gendannelse tjekkes det, om databasen allerede indeholder data. Dette gøres med en hjælpefunktion:
+
+```python
+def is_database_empty():
+    """Returnerer True, hvis databasen er tom (ingen brugere eller events)."""
+    return User.query.count() == 0 and GroupEvent.query.count() == 0
+```
+
+### 2. Kun gendannelse ved første deploy
+
+`restore_from_backup()` kører nu **kun**, hvis `is_database_empty()` returnerer `True`:
+
+```python
+def restore_from_backup():
+    if not os.path.exists(BACKUP_FILE):
+        return
+    if not is_database_empty():  # Hvis der allerede er data, afbryd
+        print("✓ Databasen indeholder allerede data — ingen gendannelse nødvendig.")
+        return
+    # ... (resten af gendannelseslogikken)
+```
+
+### 3. Sikker opdatering af backup-filen
+
+Når backup-filen opdateres på GitHub, **bevares alle eksisterende felter** (f.eks. `users`, hvis de tilføjes senere), og kun de relevante felter (`unavailable_dates`, `group_events`, `event_comments`) opdateres:
+
+```python
+# Eksempel på sikker opdatering af backup-filen
+updated_content = {**remote_content}  # Start med den eksisterende fil
+updated_content.update({
+    "unavailable_dates": local_content.get("unavailable_dates", []),
+    "group_events": local_content.get("group_events", []),
+    "event_comments": local_content.get("event_comments", [])
+})
+```
+
+---
+
+## Tekniske Detaljer
+
+### Hvorfor virker det?
+- **Idempotens**: `restore_from_backup()` er nu **idempotent** – den ændrer ikke databasen, hvis der allerede er data.
+- **Atomicitet**: Hvis der opstår en fejl under gendannelse, rulles transaktionen tilbage med `db.session.rollback()`.
+- **Separation of Concerns**: Backup-logikken adskiller sig tydeligt fra normal applikationslogik.
+
+### Håndtering af Edge Cases
+- **Tom database**: Kun ved første deploy (eller hvis databasen er nulstillet) kører gendannelsen.
+- **Delvis data**: Hvis nogle tabeller er tomme (f.eks. `EventComment`), men andre ikke er, gendannes kun de tomme tabeller.
+- **Fejlhåndtering**: Eventuelle fejl under gendannelse logges og rulles tilbage.
+
+---
+
+## Eksempel på Flow
+
+1. **Applikationen starter**:
+   - `restore_from_backup()` kaldes.
+   - `is_database_empty()` tjekker, om der er data.
+   - Hvis `False`, afbrydes gendannelsen.
+2. **Backup-filen opdateres**:
+   - Kun de relevante felter opdateres, og eksisterende data bevares.
+3. **Deploy til production**:
+   - Eksisterende data overskrives ikke, medmindre databasen er tom.
+
+---
+
+## Hvad skal du være opmærksom på?
+- **Database-migrationer**: Brug **Alembic** (eller lignende) til schema-ændringer, ikke `db.create_all()`.
+- **Backup-filens struktur**: Hvis der tilføjes nye felter (f.eks. `users`), skal de håndteres i opdateringslogikken.
+- **Test**: Altid test med en **fyldt database** for at sikre, at gendannelse ikke kører unødvendigt.
+
+---
+
+## Kodeeksempel (Samlet)
+
+```python
+def is_database_empty():
+    return User.query.count() == 0 and GroupEvent.query.count() == 0
+
+def restore_from_backup():
+    if not os.path.exists(BACKUP_FILE):
+        return
+    if not is_database_empty():  # Afgørende tjek
+        print("✓ Databasen indeholder allerede data — ingen gendannelse nødvendig.")
+        return
+    # ... (gendannelseslogik)
+```
+
+---
+
+## Opsummering
+- **Problem**: Data blev overskrevet ved redeploy.
+- **Løsning**: Kun gendannelse ved tom database + sikker opdatering af backup-filen.
+- **Resultat**: Data bevares, og backup-filen opdateres korrekt uden at overskrive uventet.
