@@ -1,0 +1,117 @@
+# Forslag til CalDAV-integration i Ambrotos
+
+## 1. Formål
+Dette dokument beskriver, hvordan CalDAV kan integreres i Ambrotos for at muliggøre synkronisering af kalendere med eksterne tjenester (f.eks. Google Calendar, Apple Calendar, Nextcloud).
+
+## 2. Valg af biblioteker
+Følgende biblioteker anbefales:
+- **Sabre/DAV**: En populær PHP-implementering af WebDAV og CalDAV. Understøtter både server- og klientfunktionalitet.
+  - Installeres via Composer: `composer require sabre/dav`
+- **iCal-parser**: Til håndtering af iCalendar-formaterede data.
+  - Installeres via Composer: `composer require johngrogg/ics-parser`
+
+## 3. Arkitektur
+### 3.1. Klient-side (Ambrotos)
+- **CalDAVService-klasse**: Håndterer forbindelse til CalDAV-servere.
+  - Metoder:
+    - `connect(string $url, string $username, string $password)`: Opretter forbindelse til CalDAV-serveren.
+    - `getCalendars()`: Henter en liste over tilgængelige kalendere.
+    - `getEvents(string $calendarId, DateTime $start, DateTime $end)`: Henter begivenheder fra en specifik kalender.
+    - `createEvent(string $calendarId, array $eventData)`: Opretter en ny begivenhed.
+    - `updateEvent(string $calendarId, string $eventId, array $eventData)`: Opdaterer en eksisterende begivenhed.
+    - `deleteEvent(string $calendarId, string $eventId)`: Sletter en begivenhed.
+
+### 3.2. Server-side (CalDAV-server)
+- **Sabre/DAV-server**: Hvis Ambrotos skal fungere som en CalDAV-server, kan Sabre/DAV bruges til at udstille kalendere via CalDAV-protokollen.
+
+## 4. Eksempelkode
+### 4.1. Opret forbindelse til CalDAV-server
+```php
+use Sabre\DAV\Client;
+
+class CalDAVService {
+    private $client;
+
+    public function connect(string $url, string $username, string $password) {
+        $settings = [
+            'baseUri' => $url,
+            'userName' => $username,
+            'password' => $password,
+        ];
+        $this->client = new Client($settings);
+    }
+
+    public function getCalendars() {
+        $response = $this->client->propFind('/', [
+            '{DAV:}displayname',
+            '{urn:ietf:params:xml:ns:caldav}calendar-description',
+        ], 1);
+
+        $calendars = [];
+        foreach ($response as $calendarUri => $props) {
+            if (isset($props['{urn:ietf:params:xml:ns:caldav}calendar-description'])) {
+                $calendars[] = [
+                    'id' => $calendarUri,
+                    'name' => $props['{DAV:}displayname'],
+                    'description' => $props['{urn:ietf:params:xml:ns:caldav}calendar-description'],
+                ];
+            }
+        }
+        return $calendars;
+    }
+}
+```
+
+### 4.2. Hent begivenheder fra en kalender
+```php
+public function getEvents(string $calendarId, DateTime $start, DateTime $end) {
+    $calendarObjects = $this->client->calendarQuery($calendarId, ['name' => 'VCALENDAR', 'comp-filters' => [
+        ['name' => 'VEVENT', 'time-range' => [
+            'start' => $start,
+            'end' => $end,
+        ]],
+    ]]);
+
+    $events = [];
+    foreach ($calendarObjects as $object) {
+        $vObject = Sabre\VObject\Reader::read($object['calendardata']);
+        foreach ($vObject->VEVENT as $vevent) {
+            $events[] = [
+                'id' => $vevent->UID->getValue(),
+                'title' => $vevent->SUMMARY->getValue(),
+                'start' => $vevent->DTSTART->getDateTime(),
+                'end' => $vevent->DTEND->getDateTime(),
+                'description' => $vevent->DESCRIPTION->getValue(),
+            ];
+        }
+    }
+    return $events;
+}
+```
+
+## 5. Sikkerhed
+- **Autentificering**: Brug HTTPS og gem aldrig adgangskoder i klart tekst. Overvej at bruge OAuth 2.0, hvis det understøttes af CalDAV-serveren.
+- **Datavalidering**: Valider altid data, der hentes fra CalDAV-serveren, for at undgå sikkerhedshuller.
+
+## 6. Integration i Ambrotos
+- **Konfigurationsfil**: Tilføj CalDAV-indstillinger i `config/caldav.php`:
+  ```php
+  return [
+      'url' => env('CALDAV_URL'),
+      'username' => env('CALDAV_USERNAME'),
+      'password' => env('CALDAV_PASSWORD'),
+  ];
+  ```
+- **Service Provider**: Registrer `CalDAVService` i Laravel's service container.
+
+## 7. Næste skridt
+1. Installer de nødvendige biblioteker via Composer.
+2. Implementer `CalDAVService`-klassen.
+3. Opret en controller til at håndtere CalDAV-anmodninger.
+4. Test forbindelsen til en CalDAV-server.
+5. Udvid funktionaliteten efter behov (f.eks. synkronisering af begivenheder).
+
+## 8. Ressourcer
+- [Sabre/DAV dokumentation](https://sabre.io/dav/)
+- [iCalendar RFC 5545](https://tools.ietf.org/html/rfc5545)
+- [CalDAV RFC 4791](https://tools.ietf.org/html/rfc4791)
