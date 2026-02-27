@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glemt kodeord</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; }
+        input { width: 100%; padding: 10px; margin: 10px 0; }
+        button { background: #007BFF; color: white; border: none; padding: 10px 15px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Glemt kodeord</h1>
+    <form method="POST" action="request_reset.php">
+        <p>Indtast din email, så sender vi et nulstillingslink.</p>
+        <input type="email" name="email" placeholder="Din email" required>
+        <button type="submit">Send link</button>
+    </form>
+</body>
+</html>
