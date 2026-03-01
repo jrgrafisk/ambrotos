@@ -1805,6 +1805,78 @@ def _seed_loge_events_2026():
         print(f"✓ Oprettet {added} placeholder-event(s) for 2026")
 
 
+_ACTIVITY_EVENTS_2026 = [
+    {
+        'title': 'Påskefrokost',
+        'description': 'Fredag d. 13. marts 2026 – Budget: 7.000 kr.',
+        'date': date(2026, 3, 13),
+        'end_date': None,
+    },
+    {
+        'title': 'Logearrangement',
+        'description': 'Lørdag d. 23. maj 2026 – Budget: 7.000 kr.',
+        'date': date(2026, 5, 23),
+        'end_date': None,
+    },
+    {
+        'title': 'Logearrangement',
+        'description': 'Fredag d. 3. juli 2026 – Budget: 7.000 kr.',
+        'date': date(2026, 7, 3),
+        'end_date': None,
+    },
+    {
+        'title': 'Logens årlige ferie',
+        'description': 'Forlænget weekend uge 37 – tirsdag d. 8. til lørdag d. 12. september 2026. Budget: 20.000 kr.',
+        'date': date(2026, 9, 8),
+        'end_date': date(2026, 9, 12),
+    },
+    {
+        'title': 'Julefrokost med Vandværksforeningen',
+        'description': 'Fredag d. 6. november 2026 – Budget: 5.000 kr.',
+        'date': date(2026, 11, 6),
+        'end_date': None,
+    },
+    {
+        'title': 'Jule/nytårs-hygge',
+        'description': 'Søndag d. 27. december 2026 – Budget: 3.000 kr.',
+        'date': date(2026, 12, 27),
+        'end_date': None,
+    },
+    {
+        'title': 'Generalforsamling 2027',
+        'description': 'Fredag d. 29. til lørdag d. 30. januar 2027 – Budget: 10.000 kr.',
+        'date': date(2027, 1, 29),
+        'end_date': date(2027, 1, 30),
+    },
+]
+
+
+def _seed_activity_events_2026():
+    """Insert the 2026 activity plan events if not already present (checked by title + date)."""
+    admin = User.query.filter_by(is_admin=True).first() or User.query.first()
+    if not admin:
+        return
+    team = Team.query.first()
+    existing = {(e.title, e.date) for e in GroupEvent.query.all()}
+    added = 0
+    for ev in _ACTIVITY_EVENTS_2026:
+        if (ev['title'], ev['date']) not in existing:
+            db.session.add(GroupEvent(
+                team_id=team.id if team else None,
+                title=ev['title'],
+                description=ev['description'],
+                date=ev['date'],
+                end_date=ev['end_date'],
+                created_by=admin.id,
+                created_at=datetime(2026, 3, 1, 12, 0, 0),
+            ))
+            added += 1
+    if added:
+        db.session.commit()
+        write_backup()
+        print(f"✓ Tilføjet {added} arrangement(er) fra aktivitetsplan 2026")
+
+
 def _has_changes_since_backup() -> bool:
     """Sammenlign live DB med seneste backup. True = der er ændringer."""
     if not os.path.exists(BACKUP_FILE):
@@ -1965,6 +2037,9 @@ def init_db():
 
         # Seed fixed lodge meetings for 2026 if not already present
         _seed_loge_events_2026()
+
+        # Seed activity plan events for 2026/2027 if not already present
+        _seed_activity_events_2026()
 
         # Seed unavailable dates for lodge members 2026
         _seed_unavailable_dates_2026()
