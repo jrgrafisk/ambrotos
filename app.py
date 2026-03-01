@@ -383,6 +383,11 @@ def write_backup():
                 }
                 for c in EventComment.query.order_by(EventComment.id).all()
             ],
+            'holidays': [
+                {'date': d.isoformat(), 'name': name, 'description': desc}
+                for year in range(date.today().year, date.today().year + 3)
+                for d, name, desc in get_danish_holidays(year)
+            ],
         }
         with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -1755,6 +1760,137 @@ def _seed_loge_events_2026():
         print(f"✓ Oprettet {added} placeholder-event(s) for 2026")
 
 
+def _has_changes_since_backup() -> bool:
+    """Sammenlign live DB med seneste backup. True = der er ændringer."""
+    if not os.path.exists(BACKUP_FILE):
+        return True
+    try:
+        with open(BACKUP_FILE, encoding='utf-8') as f:
+            saved = json.load(f)
+    except Exception:
+        return True
+
+    live_ud = sorted(
+        [{'user_id': ud.user_id, 'team_id': ud.team_id, 'date': ud.date.isoformat()}
+         for ud in UnavailableDate.query.all()],
+        key=lambda x: (x['user_id'], str(x['date']))
+    )
+    live_ge = sorted(
+        [{'id': e.id, 'title': e.title, 'date': e.date.isoformat(),
+          'end_date': e.end_date.isoformat() if e.end_date else None}
+         for e in GroupEvent.query.all()],
+        key=lambda x: x['id']
+    )
+    live_ec = sorted(
+        [{'event_id': c.event_id, 'user_id': c.user_id, 'text': c.text}
+         for c in EventComment.query.all()],
+        key=lambda x: (x['event_id'], x['user_id'])
+    )
+
+    saved_ud = sorted(saved.get('unavailable_dates', []),
+                      key=lambda x: (x['user_id'], str(x['date'])))
+    saved_ge = sorted(
+        [{'id': e['id'], 'title': e['title'], 'date': e['date'], 'end_date': e.get('end_date')}
+         for e in saved.get('group_events', [])],
+        key=lambda x: x['id']
+    )
+    saved_ec = sorted(
+        [{'event_id': c['event_id'], 'user_id': c['user_id'], 'text': c['text']}
+         for c in saved.get('event_comments', [])],
+        key=lambda x: (x['event_id'], x['user_id'])
+    )
+
+    return live_ud != saved_ud or live_ge != saved_ge or live_ec != saved_ec
+
+
+def _rotate_and_push_backups():
+    """Rotér de nummererede backup-filer lokalt og på FTP.
+    backup_1 = nyeste, backup_3 = ældste. Forudsætter at BACKUP_FILE netop er skrevet."""
+    import shutil
+    data_dir = os.path.dirname(BACKUP_FILE)
+
+    # Lokal rotation: 2→3, 1→2, current→1
+    for n in (2, 1):
+        src = os.path.join(data_dir, f'calendar_backup_{n}.json')
+        dst = os.path.join(data_dir, f'calendar_backup_{n + 1}.json')
+        if os.path.exists(src):
+            os.replace(src, dst)
+    if os.path.exists(BACKUP_FILE):
+        shutil.copy2(BACKUP_FILE, os.path.join(data_dir, 'calendar_backup_1.json'))
+
+    def _ftp_rotate():
+        host = os.environ.get('FTP_HOST', '')
+        user = os.environ.get('FTP_USER', '')
+        passwd = os.environ.get('FTP_PASS', '')
+        remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
+        if not (host and user and passwd):
+            return
+        try:
+            ftp = ftplib.FTP_TLS(host, timeout=30)
+            ftp.login(user, passwd)
+            ftp.prot_p()
+            _ftp_ensure_dir(ftp, remote_dir)
+
+            # Rename på FTP: 2→3, 1→2
+            for n in (2, 1):
+                try:
+                    ftp.rename(f'calendar_backup_{n}.json', f'calendar_backup_{n + 1}.json')
+                except ftplib.error_perm:
+                    pass  # Filen fandtes ikke endnu
+
+            backup_1 = os.path.join(os.path.dirname(BACKUP_FILE), 'calendar_backup_1.json')
+            with open(backup_1, 'rb') as f:
+                ftp.storbinary('STOR calendar_backup_1.json', f)
+            with open(BACKUP_FILE, 'rb') as f:
+                ftp.storbinary('STOR calendar_backup.json', f)
+            ftp.quit()
+            print('✓ Roteret FTP-backup (calendar_backup_1/2/3.json opdateret)')
+        except Exception as exc:
+            print(f'⚠ FTP rotation fejlede: {exc}')
+
+    threading.Thread(target=_ftp_rotate, daemon=True).start()
+
+
+def _start_daily_backup_thread():
+    """Starter én daemon-tråd der kl. 06:00 (Copenhagen) tjekker for ændringer
+    og kører write_backup() + _rotate_and_push_backups() hvis nødvendigt.
+    fcntl-lås sikrer at kun én Gunicorn-worker kører scheduleren."""
+    import fcntl
+    import time
+    from zoneinfo import ZoneInfo
+
+    lock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', '.backup.lock')
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+
+    def _run():
+        try:
+            lf = open(lock_path, 'w')
+            fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return  # En anden worker kører allerede scheduleren
+
+        tz = ZoneInfo('Europe/Copenhagen')
+        print('✓ Daglig backup-scheduler startet (kører kl. 06:00 Copenhagen)')
+        while True:
+            now = datetime.now(tz)
+            target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += timedelta(days=1)
+            time.sleep((target - now).total_seconds())
+            try:
+                with app.app_context():
+                    if _has_changes_since_backup():
+                        write_backup()
+                        _rotate_and_push_backups()
+                        print('✓ Daglig backup med rotation gennemført (06:00)')
+                    else:
+                        print('✓ Daglig backup: ingen ændringer siden sidst, springer over')
+            except Exception as exc:
+                print(f'⚠ Daglig backup fejlede: {exc}')
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def init_db():
     with app.app_context():
         db.create_all()   # only creates tables that don't yet exist
@@ -1788,6 +1924,7 @@ def init_db():
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').
 # init_db() is idempotent — safe to call multiple times.
 init_db()
+_start_daily_backup_thread()
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
