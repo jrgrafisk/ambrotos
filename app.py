@@ -1551,6 +1551,90 @@ def admin_generate_reset_token(user_id):
     return jsonify({'reset_url': reset_url, 'username': u.username})
 
 
+# ── Admin manual backup ─────────────────────────────────────────────────────────
+
+@app.route('/api/admin/backup-now', methods=['POST'])
+@login_required
+@admin_required
+def admin_backup_now():
+    """Upload a timestamped manual backup to FTP /ambrotos/manualbackup/."""
+    host   = os.environ.get('FTP_HOST', '')
+    user   = os.environ.get('FTP_USER', '')
+    passwd = os.environ.get('FTP_PASS', '')
+    if not host or not user or not passwd:
+        return jsonify({'error': 'FTP er ikke konfigureret på serveren'}), 503
+
+    # Build the same payload as write_backup()
+    payload = {
+        'version': 2,
+        'exported_at': datetime.utcnow().isoformat(),
+        'teams': [
+            {'id': t.id, 'name': t.name, 'description': t.description or ''}
+            for t in Team.query.order_by(Team.id).all()
+        ],
+        'user_teams': [
+            {'user_id': ut.user_id, 'team_id': ut.team_id, 'is_team_admin': ut.is_team_admin}
+            for ut in UserTeam.query.all()
+        ],
+        'users': [
+            {
+                'id': u.id,
+                'username': u.username,
+                'password_hash': u.password_hash,
+                'color': u.color,
+                'is_admin': u.is_admin,
+            }
+            for u in User.query.order_by(User.id).all()
+        ],
+        'unavailable_dates': [
+            {'user_id': ud.user_id, 'team_id': ud.team_id, 'date': ud.date.isoformat()}
+            for ud in UnavailableDate.query.all()
+        ],
+        'group_events': [
+            {
+                'id': e.id,
+                'team_id': e.team_id,
+                'title': e.title,
+                'description': e.description or '',
+                'date': e.date.isoformat(),
+                'end_date': e.end_date.isoformat() if e.end_date else None,
+                'created_by': e.created_by,
+                'organizer1_id': e.organizer1_id,
+                'organizer2_id': e.organizer2_id,
+                'created_at': e.created_at.isoformat(),
+            }
+            for e in GroupEvent.query.order_by(GroupEvent.id).all()
+        ],
+        'event_comments': [
+            {
+                'event_id': c.event_id,
+                'user_id': c.user_id,
+                'text': c.text,
+                'is_hidden': c.is_hidden,
+                'created_at': c.created_at.isoformat(),
+            }
+            for c in EventComment.query.order_by(EventComment.id).all()
+        ],
+    }
+    file_data = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8')
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    filename  = f'{timestamp}.json'
+    remote_dir = '/ambrotos/manualbackup'
+
+    try:
+        ftp = ftplib.FTP_TLS(host, timeout=30)
+        ftp.login(user, passwd)
+        ftp.prot_p()
+        _ftp_ensure_dir(ftp, remote_dir)
+        ftp.storbinary(f'STOR {filename}', io.BytesIO(file_data))
+        ftp.quit()
+        print(f'✓ Manuel backup gemt: {remote_dir}/{filename}')
+        return jsonify({'filename': filename, 'path': f'{remote_dir}/{filename}'})
+    except Exception as exc:
+        print(f'⚠ Manuel backup fejlede: {exc}')
+        return jsonify({'error': str(exc)}), 500
+
+
 # ── Admin team management routes ────────────────────────────────────────────────
 
 @app.route('/api/admin/teams', methods=['GET'])

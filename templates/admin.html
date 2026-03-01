@@ -10,9 +10,11 @@
       <a href="{{ url_for('index') }}" class="btn btn-outline btn-sm">← Kalender</a>
       <h1 class="admin-title">Admin{% if current_team %} – {{ current_team.name }}{% endif %}</h1>
     </div>
-    <div style="display:flex;gap:8px">
+    <div style="display:flex;gap:8px;align-items:center">
       {% if is_super_admin %}<button class="btn btn-outline btn-sm" onclick="openAddTeamModal()">+ Nyt team</button>{% endif %}
       <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Tilføj bruger</button>
+      <button class="btn btn-outline btn-sm" id="backupNowBtn" onclick="triggerManualBackup()">💾 Backup nu</button>
+      <span id="backupNowStatus" style="font-size:13px;color:var(--text-muted)"></span>
     </div>
   </header>
 
@@ -249,6 +251,31 @@
 const ALL_TEAMS = {{ teams_json|tojson }};
 const IS_SUPER_ADMIN = {{ is_super_admin|tojson }};
 let currentTeamForMembers = null;
+
+/* ── Manuel backup ─────────────────────────────── */
+async function triggerManualBackup() {
+  const btn = document.getElementById('backupNowBtn');
+  const status = document.getElementById('backupNowStatus');
+  btn.disabled = true;
+  btn.textContent = '⏳ Gemmer…';
+  status.textContent = '';
+  try {
+    const resp = await fetch('/api/admin/backup-now', { method: 'POST' });
+    const data = await resp.json();
+    if (resp.ok) {
+      status.style.color = 'var(--success, #43a047)';
+      status.textContent = `✓ Gemt: ${data.filename}`;
+    } else {
+      status.style.color = 'var(--danger, #e53935)';
+      status.textContent = `Fejl: ${data.error}`;
+    }
+  } catch (err) {
+    status.style.color = 'var(--danger, #e53935)';
+    status.textContent = 'Netværksfejl';
+  }
+  btn.disabled = false;
+  btn.textContent = '💾 Backup nu';
+}
 
 /* ── Load team member counts ────────────────────── */
 async function loadTeamMemberCounts() {
