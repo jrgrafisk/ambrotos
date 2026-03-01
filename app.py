@@ -391,7 +391,7 @@ def write_backup():
         }
         with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        push_backup_to_ftp()
+        _rotate_and_push_backups()
     except Exception as exc:
         print(f'⚠ Backup write failed: {exc}')
 
@@ -497,9 +497,25 @@ def _try_use_best_backup():
         ftp.quit()
     except Exception as exc:
         print(f'⚠ FTP download fejlede ({host}:{remote_dir}): {exc}')
-        # Clean up temp file if partial
         if os.path.exists(ftp_file):
             os.remove(ftp_file)
+        # Prøv nummererede backup-filer som fallback (backup_1 → backup_2 → backup_3)
+        for n in (1, 2, 3):
+            try:
+                ftp2 = ftplib.FTP_TLS(host, timeout=30)
+                ftp2.login(user, passwd)
+                ftp2.prot_p()
+                ftp2.cwd(remote_dir)
+                os.makedirs(os.path.dirname(BACKUP_FILE), exist_ok=True)
+                with open(ftp_file, 'wb') as f2:
+                    ftp2.retrbinary(f'RETR calendar_backup_{n}.json', f2.write)
+                ftp2.quit()
+                os.replace(ftp_file, BACKUP_FILE)
+                print(f'✓ Bruger FTP fallback: calendar_backup_{n}.json')
+                return
+            except Exception:
+                if os.path.exists(ftp_file):
+                    os.remove(ftp_file)
         return
 
     # Compare timestamps — use FTP version if newer
