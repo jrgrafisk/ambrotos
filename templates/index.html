@@ -28,6 +28,9 @@
         </div>
       </div>
       {% endif %}
+      <span id="backupIndicator" class="backup-indicator backup-indicator--unknown" title="Backup status ukendt">
+        <span class="backup-dot"></span><span class="backup-label">Backup</span>
+      </span>
       <span class="user-dot" style="background: {{ current_user.color }}"></span>
       <span class="user-name">{{ current_user.username }}</span>
       {% if current_user.is_admin %}
@@ -164,4 +167,39 @@
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/locales-all.global.min.js"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>
+(function () {
+  function timeAgo(isoStr) {
+    if (!isoStr) return '';
+    const diffSec = Math.floor((Date.now() - new Date(isoStr + 'Z')) / 1000);
+    if (diffSec < 60) return 'lige nu';
+    if (diffSec < 3600) return Math.floor(diffSec / 60) + ' min siden';
+    if (diffSec < 86400) return Math.floor(diffSec / 3600) + ' t siden';
+    return Math.floor(diffSec / 86400) + ' d siden';
+  }
+
+  function updateBackupIndicator(data) {
+    const el = document.getElementById('backupIndicator');
+    if (!el) return;
+    const localOk = data.local_ok;
+    const ftpOk = data.ftp_ok;
+    const ftpEnabled = data.ftp_enabled;
+    const ok = localOk === true && (!ftpEnabled || ftpOk === true);
+    const failed = localOk === false || (ftpEnabled && ftpOk === false);
+    el.className = 'backup-indicator ' + (ok ? 'backup-indicator--ok' : failed ? 'backup-indicator--error' : 'backup-indicator--unknown');
+    const localTime = timeAgo(data.local_time);
+    const parts = [];
+    if (data.local_time) parts.push('Lokal: ' + (localOk ? '✓' : '✗') + ' ' + localTime);
+    if (ftpEnabled) parts.push('FTP: ' + (ftpOk === true ? '✓' : ftpOk === false ? '✗' : '?') + (data.ftp_time ? ' ' + timeAgo(data.ftp_time) : ''));
+    el.title = parts.length ? parts.join('\n') : 'Backup status ukendt';
+  }
+
+  function fetchBackupStatus() {
+    fetch('/api/backup-status').then(r => r.json()).then(updateBackupIndicator).catch(() => {});
+  }
+
+  fetchBackupStatus();
+  setInterval(fetchBackupStatus, 120000); // Poll every 2 minutes
+})();
+</script>
 {% endblock %}

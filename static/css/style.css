@@ -228,6 +228,48 @@ html, body {
   flex-shrink: 0;
 }
 
+/* ── Backup indicator ────────────────────────────────── */
+.backup-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: default;
+  border: 1px solid transparent;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.backup-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.backup-indicator--ok {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+}
+.backup-indicator--ok .backup-dot { background: #16a34a; }
+
+.backup-indicator--error {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+.backup-indicator--error .backup-dot { background: var(--danger); }
+
+.backup-indicator--unknown {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.backup-indicator--unknown .backup-dot { background: var(--text-muted); }
+
 .user-name { font-weight: 500; }
 
 /* ── Main content ────────────────────────────────────── */

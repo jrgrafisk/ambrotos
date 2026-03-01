@@ -329,6 +329,14 @@ def load_user(user_id):
 
 BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'calendar_backup.json')
 
+_backup_status = {
+    'local_ok': None,   # True / False / None (unknown)
+    'local_time': None, # ISO string
+    'ftp_ok': None,     # True / False / None (disabled or unknown)
+    'ftp_time': None,   # ISO string
+    'ftp_enabled': False,
+}
+
 
 def write_backup():
     """Persist current calendar data to a git-tracked JSON file (version 2 format).
@@ -391,8 +399,15 @@ def write_backup():
         }
         with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        _backup_status['local_ok'] = True
+        _backup_status['local_time'] = datetime.utcnow().isoformat()
+        _backup_status['ftp_enabled'] = bool(
+            os.environ.get('FTP_HOST') and os.environ.get('FTP_USER') and os.environ.get('FTP_PASS')
+        )
         _rotate_and_push_backups()
     except Exception as exc:
+        _backup_status['local_ok'] = False
+        _backup_status['local_time'] = datetime.utcnow().isoformat()
         print(f'⚠ Backup write failed: {exc}')
 
 
@@ -1630,6 +1645,20 @@ def admin_set_team_admin(team_id, user_id):
     return jsonify({'user_id': user_id, 'team_id': team_id, 'is_team_admin': ut.is_team_admin})
 
 
+@app.route('/api/backup-status')
+@login_required
+def api_backup_status():
+    local_time = _backup_status['local_time']
+    ftp_time = _backup_status['ftp_time']
+    return jsonify({
+        'local_ok': _backup_status['local_ok'],
+        'local_time': local_time,
+        'ftp_ok': _backup_status['ftp_ok'],
+        'ftp_time': ftp_time,
+        'ftp_enabled': _backup_status['ftp_enabled'],
+    })
+
+
 # ── Database seed ──────────────────────────────────────────────────────────────
 
 def migrate_db():
@@ -1860,8 +1889,12 @@ def _rotate_and_push_backups():
             with open(BACKUP_FILE, 'rb') as f:
                 ftp.storbinary('STOR calendar_backup.json', f)
             ftp.quit()
+            _backup_status['ftp_ok'] = True
+            _backup_status['ftp_time'] = datetime.utcnow().isoformat()
             print('✓ Roteret FTP-backup (calendar_backup_1/2/3.json opdateret)')
         except Exception as exc:
+            _backup_status['ftp_ok'] = False
+            _backup_status['ftp_time'] = datetime.utcnow().isoformat()
             print(f'⚠ FTP rotation fejlede: {exc}')
 
     threading.Thread(target=_ftp_rotate, daemon=True).start()
