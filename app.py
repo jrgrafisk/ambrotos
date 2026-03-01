@@ -1659,13 +1659,13 @@ def _migrate_to_teams():
     print('✓ Migreret til multi-team: Ambrotos team oprettet')
 
 
-_LOGE_EVENTS_2026 = [
-    (date(2026, 2, 28), "Logemøde – uge 9",  "Lørdag d. 28. februar 2026"),
-    (date(2026, 3, 28), "Logemøde – uge 13", "Lørdag d. 28. marts 2026"),
-    (date(2026, 4, 25), "Logemøde – uge 17", "Lørdag d. 25. april 2026"),
-    (date(2026, 6, 20), "Logemøde – uge 25", "Lørdag d. 20. juni 2026"),
-    (date(2026, 9, 12), "Logemøde – uge 37", "Lørdag d. 12. september 2026"),
-    (date(2026, 11, 7), "Logemøde – uge 45", "Lørdag d. 7. november 2026"),
+_LOGE_DATES_2026 = [
+    date(2026, 2, 28),
+    date(2026, 3, 28),
+    date(2026, 4, 25),
+    date(2026, 6, 20),
+    date(2026, 9, 12),
+    date(2026, 11, 7),
 ]
 
 
@@ -1677,19 +1677,19 @@ def _seed_loge_events_2026():
         return
     team = Team.query.first()
     added = 0
-    for ev_date, title, description in _LOGE_EVENTS_2026:
+    for ev_date in _LOGE_DATES_2026:
         if ev_date not in existing_dates:
             db.session.add(GroupEvent(
                 team_id=team.id if team else None,
-                title=title,
-                description=description,
+                title="Placeholder",
+                description="",
                 date=ev_date,
                 created_by=admin.id,
             ))
             added += 1
     if added:
         db.session.commit()
-        print(f"✓ Oprettet {added} logemøde-event(s) for 2026")
+        print(f"✓ Oprettet {added} placeholder-event(s) for 2026")
 
 
 def init_db():
