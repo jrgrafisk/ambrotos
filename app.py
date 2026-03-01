@@ -1670,6 +1670,7 @@ def _seed_unavailable_dates_2026():
         d += timedelta(days=7)
 
     unavailable = {
+        "Rasmus Borup": list(even_week_sats),  # Nørre: kan ikke i lige uger
         "Anders Busch": [
             date(2026, 1, 8), date(2026, 5, 29),
             date(2026, 10, 21), date(2026, 12, 20),
