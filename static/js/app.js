@@ -8,6 +8,7 @@ let eventMode     = false;
 let currentEventId = null;
 let pendingEventDate = null;
 let editingEventId = null; // non-null when editing an existing event
+let cachedUsers   = null;  // cached user list for organizer dropdowns
 
 /* ─── Bootstrap ─────────────────────────────────────── */
 
@@ -283,6 +284,24 @@ async function toggleUnavailable(dateStr) {
    Event create modal
    ══════════════════════════════════════════════════════ */
 
+async function _populateOrganizerDropdowns(org1Id, org2Id) {
+  if (!cachedUsers) {
+    try {
+      const r = await fetch('/api/users');
+      cachedUsers = r.ok ? await r.json() : [];
+    } catch { cachedUsers = []; }
+  }
+  const opts = cachedUsers.map(u =>
+    `<option value="${u.id}">${escapeHtml(u.username)}</option>`
+  ).join('');
+  const blank = '<option value="">— ingen —</option>';
+  ['eventOrganizer1', 'eventOrganizer2'].forEach((id, idx) => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = blank + opts;
+    sel.value = idx === 0 ? (org1Id || '') : (org2Id || '');
+  });
+}
+
 function openEventCreateModal(dateStr) {
   editingEventId = null;
   pendingEventDate = dateStr;
@@ -292,6 +311,7 @@ function openEventCreateModal(dateStr) {
   document.getElementById('eventDesc').value  = '';
   document.getElementById('eventStartDate').value = dateStr;
   document.getElementById('eventEndDate').value   = '';
+  _populateOrganizerDropdowns(null, null);
   document.getElementById('eventCreateOverlay').style.display = 'flex';
   setTimeout(() => document.getElementById('eventTitle').focus(), 50);
 }
@@ -305,6 +325,7 @@ function openEventEditModal(ev) {
   document.getElementById('eventDesc').value  = ev.description || '';
   document.getElementById('eventStartDate').value = ev.date;
   document.getElementById('eventEndDate').value   = ev.end_date || '';
+  _populateOrganizerDropdowns(ev.organizer1_id, ev.organizer2_id);
   closeEventDetailModal();
   document.getElementById('eventCreateOverlay').style.display = 'flex';
   setTimeout(() => document.getElementById('eventTitle').focus(), 50);
@@ -321,6 +342,8 @@ async function submitEventCreate() {
   const desc     = document.getElementById('eventDesc').value.trim();
   const startDate = document.getElementById('eventStartDate').value;
   const endDate   = document.getElementById('eventEndDate').value;
+  const org1 = parseInt(document.getElementById('eventOrganizer1').value) || null;
+  const org2 = parseInt(document.getElementById('eventOrganizer2').value) || null;
   if (!title || !startDate) return;
 
   try {
@@ -329,13 +352,13 @@ async function submitEventCreate() {
       resp = await fetch(`/api/group-events/${editingEventId}`, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ title, description: desc, date: startDate, end_date: endDate || null }),
+        body:    JSON.stringify({ title, description: desc, date: startDate, end_date: endDate || null, organizer1_id: org1, organizer2_id: org2 }),
       });
     } else {
       resp = await fetch('/api/group-events', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ title, description: desc, date: startDate, end_date: endDate || null }),
+        body:    JSON.stringify({ title, description: desc, date: startDate, end_date: endDate || null, organizer1_id: org1, organizer2_id: org2 }),
       });
     }
     if (resp.ok) {
@@ -379,12 +402,23 @@ async function showEventDetailModal(eventId) {
     descEl.style.display = ev.description ? '' : 'none';
     document.getElementById('eventDetailCreator').textContent = `Oprettet af ${ev.creator}`;
 
+    const orgEl = document.getElementById('eventDetailOrganizers');
+    const orgs = [ev.organizer1, ev.organizer2].filter(Boolean).map(o => o.username);
+    if (orgs.length) {
+      orgEl.textContent = `Arrangør${orgs.length > 1 ? 'er' : ''}: ${orgs.join(' & ')}`;
+      orgEl.style.display = '';
+    } else {
+      orgEl.style.display = 'none';
+    }
+
     // Action buttons: edit + delete for creator and admins
     let actionsHtml = '';
     if (ev.can_edit) {
       actionsHtml += `<button class="btn btn-sm btn-outline" onclick='openEventEditModal(${JSON.stringify({
         id: ev.id, title: ev.title, description: ev.description,
-        date: ev.date, end_date: ev.end_date
+        date: ev.date, end_date: ev.end_date,
+        organizer1_id: ev.organizer1 ? ev.organizer1.id : null,
+        organizer2_id: ev.organizer2 ? ev.organizer2.id : null,
       })})'>Rediger</button> `;
       actionsHtml += `<button class="btn btn-sm btn-danger" onclick="deleteGroupEvent(${ev.id})">Slet event</button>`;
     }
@@ -557,6 +591,9 @@ async function loadUpcomingEvents() {
           <div class="event-item-meta">
             ${escapeHtml(ev.creator)}${commentStr}
           </div>
+          ${(ev.organizer1 || ev.organizer2)
+            ? `<div class="event-item-organizers">Arrangør: ${[ev.organizer1, ev.organizer2].filter(Boolean).map(o => escapeHtml(o.username)).join(' &amp; ')}</div>`
+            : ''}
         </div>
       `;
     }).join('');

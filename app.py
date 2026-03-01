@@ -290,8 +290,12 @@ class GroupEvent(db.Model):
     date = db.Column(db.Date, nullable=False)
     end_date = db.Column(db.Date, nullable=True)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    organizer1_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    organizer2_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    creator = db.relationship('User', backref='created_events')
+    creator = db.relationship('User', foreign_keys=[created_by], backref='created_events')
+    organizer1 = db.relationship('User', foreign_keys=[organizer1_id])
+    organizer2 = db.relationship('User', foreign_keys=[organizer2_id])
     comments = db.relationship(
         'EventComment', backref='event', lazy=True,
         cascade='all, delete-orphan', order_by='EventComment.created_at',
@@ -377,6 +381,8 @@ def write_backup():
                     'date': e.date.isoformat(),
                     'end_date': e.end_date.isoformat() if e.end_date else None,
                     'created_by': e.created_by,
+                    'organizer1_id': e.organizer1_id,
+                    'organizer2_id': e.organizer2_id,
                     'created_at': e.created_at.isoformat(),
                 }
                 for e in GroupEvent.query.order_by(GroupEvent.id).all()
@@ -644,6 +650,8 @@ def restore_from_backup():
                 raw_tid = item.get('team_id')
                 new_tid = team_id_map.get(raw_tid) if raw_tid else None
                 end_date_str = item.get('end_date')
+                org1 = item.get('organizer1_id')
+                org2 = item.get('organizer2_id')
                 ev = GroupEvent(
                     team_id=new_tid,
                     title=item['title'],
@@ -651,6 +659,8 @@ def restore_from_backup():
                     date=date.fromisoformat(item['date']),
                     end_date=date.fromisoformat(end_date_str) if end_date_str else None,
                     created_by=item['created_by'],
+                    organizer1_id=org1 if org1 in valid_user_ids else None,
+                    organizer2_id=org2 if org2 in valid_user_ids else None,
                     created_at=datetime.fromisoformat(item.get('created_at', datetime.utcnow().isoformat())),
                 )
                 db.session.add(ev)
@@ -975,6 +985,19 @@ def reset_password(token):
 
 # ── API ────────────────────────────────────────────────────────────────────────
 
+@app.route('/api/users')
+@login_required
+def list_users():
+    """Return all users in the current team (for organizer dropdowns etc.)."""
+    team = get_current_team()
+    if team:
+        user_ids = {ut.user_id for ut in UserTeam.query.filter_by(team_id=team.id).all()}
+        users = User.query.filter(User.id.in_(user_ids)).order_by(User.username).all()
+    else:
+        users = User.query.order_by(User.username).all()
+    return jsonify([{'id': u.id, 'username': u.username, 'color': u.color} for u in users])
+
+
 @app.route('/calendar.ics')
 @login_required
 def serve_ics():
@@ -1169,6 +1192,8 @@ def list_group_events():
         'end_date': e.end_date.isoformat() if e.end_date else None,
         'creator': e.creator.username,
         'created_by': e.created_by,
+        'organizer1': {'id': e.organizer1.id, 'username': e.organizer1.username} if e.organizer1 else None,
+        'organizer2': {'id': e.organizer2.id, 'username': e.organizer2.username} if e.organizer2 else None,
         'comment_count': len(e.comments),
     } for e in events])
 
@@ -1198,8 +1223,15 @@ def create_group_event():
     team = get_current_team()
     if not team:
         return jsonify({'error': 'Intet team valgt'}), 400
-    event = GroupEvent(title=title, description=description, date=d, end_date=end_d,
-                       created_by=current_user.id, team_id=team.id)
+    valid_ids = {ut.user_id for ut in UserTeam.query.filter_by(team_id=team.id).all()}
+    org1 = data.get('organizer1_id')
+    org2 = data.get('organizer2_id')
+    event = GroupEvent(
+        title=title, description=description, date=d, end_date=end_d,
+        created_by=current_user.id, team_id=team.id,
+        organizer1_id=org1 if org1 in valid_ids else None,
+        organizer2_id=org2 if org2 in valid_ids else None,
+    )
     db.session.add(event)
     db.session.commit()
     write_backup()
@@ -1258,6 +1290,8 @@ def get_group_event(event_id):
         'end_date': event.end_date.isoformat() if event.end_date else None,
         'creator': event.creator.username,
         'created_by': event.created_by,
+        'organizer1': {'id': event.organizer1.id, 'username': event.organizer1.username} if event.organizer1 else None,
+        'organizer2': {'id': event.organizer2.id, 'username': event.organizer2.username} if event.organizer2 else None,
         'is_own': event.created_by == current_user.id,
         'can_edit': can_edit,
         'attending': [
@@ -1316,6 +1350,12 @@ def update_group_event(event_id):
                 return jsonify({'error': 'Ugyldig slutdato'}), 400
         else:
             event.end_date = None
+    if 'organizer1_id' in data:
+        org1 = data['organizer1_id']
+        event.organizer1_id = org1 if org1 else None
+    if 'organizer2_id' in data:
+        org2 = data['organizer2_id']
+        event.organizer2_id = org2 if org2 else None
     db.session.commit()
     write_backup()
     return jsonify({
@@ -1671,6 +1711,10 @@ def migrate_db():
                 conn.execute(sa_text("ALTER TABLE group_events ADD COLUMN end_date DATE"))
             if 'team_id' not in cols:
                 conn.execute(sa_text("ALTER TABLE group_events ADD COLUMN team_id INTEGER REFERENCES teams(id)"))
+            if 'organizer1_id' not in cols:
+                conn.execute(sa_text("ALTER TABLE group_events ADD COLUMN organizer1_id INTEGER REFERENCES users(id)"))
+            if 'organizer2_id' not in cols:
+                conn.execute(sa_text("ALTER TABLE group_events ADD COLUMN organizer2_id INTEGER REFERENCES users(id)"))
         if inspector.has_table('event_comments'):
             cols = {c['name'] for c in inspector.get_columns('event_comments')}
             if 'is_hidden' not in cols:
