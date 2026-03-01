@@ -2129,14 +2129,8 @@ def init_db():
         # Migrate existing single-team data to multi-team structure
         _migrate_to_teams()
 
-        # Seed fixed lodge meetings for 2026 if not already present
-        _seed_loge_events_2026()
-
-        # One-time migration: 2026 activity plan events (self-skipping after first run)
-        _once_seed_activity_events_2026()
-
-        # Seed unavailable dates for lodge members 2026
-        _seed_unavailable_dates_2026()
+        # Persist the final post-startup state to backup (covers any migrations above)
+        write_backup()
 
 
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').
