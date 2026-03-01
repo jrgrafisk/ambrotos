@@ -1659,6 +1659,68 @@ def _migrate_to_teams():
     print('✓ Migreret til multi-team: Ambrotos team oprettet')
 
 
+def _seed_unavailable_dates_2026():
+    """Add unavailable dates for lodge members 2026. Idempotent."""
+    # Generate all even-ISO-week Saturdays in 2026 for Martin Bach
+    even_week_sats = []
+    d = date(2026, 1, 3)  # first Saturday 2026
+    while d.year == 2026:
+        if d.isocalendar()[1] % 2 == 0:
+            even_week_sats.append(d)
+        d += timedelta(days=7)
+
+    unavailable = {
+        "Anders Busch": [
+            date(2026, 1, 8), date(2026, 5, 29),
+            date(2026, 10, 21), date(2026, 12, 20),
+        ],
+        "Anders Badsberg": [
+            date(2026, 1, 31), date(2026, 3, 20), date(2026, 4, 2),
+            date(2026, 4, 13), date(2026, 9, 6), date(2026, 10, 8),
+        ],
+        "Rasmus Bjerg": [
+            date(2026, 1, 20), date(2026, 3, 2), date(2026, 9, 4),
+        ],
+        "Mikael": [
+            date(2026, 4, 2), date(2026, 5, 9), date(2026, 6, 2),
+            date(2026, 6, 13), date(2026, 7, 24), date(2026, 11, 15),
+        ],
+        "Jakob": [
+            date(2026, 4, 10), date(2026, 8, 11), date(2026, 12, 6),
+        ],
+        "Martin Bach": list(set([date(2026, 1, 31), date(2026, 7, 1)] + even_week_sats)),
+        "Bjarne": [
+            date(2026, 1, 27), date(2026, 2, 14),
+            date(2026, 9, 30), date(2026, 11, 12),
+        ],
+        "Johan": [
+            date(2026, 4, 23), date(2026, 7, 28), date(2026, 10, 10),
+        ],
+        "Kasper": [
+            date(2026, 4, 4), date(2026, 11, 18),
+        ],
+    }
+
+    team = Team.query.first()
+    added = 0
+    for username, dates in unavailable.items():
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            continue
+        existing = {ud.date for ud in UnavailableDate.query.filter_by(user_id=user.id).all()}
+        for ud_date in dates:
+            if ud_date not in existing:
+                db.session.add(UnavailableDate(
+                    user_id=user.id,
+                    team_id=team.id if team else None,
+                    date=ud_date,
+                ))
+                added += 1
+    if added:
+        db.session.commit()
+        print(f"✓ Tilføjet {added} fraværsdatoer for logemedlemmer 2026")
+
+
 _LOGE_DATES_2026 = [
     date(2026, 2, 28),
     date(2026, 3, 28),
@@ -1717,6 +1779,9 @@ def init_db():
 
         # Seed fixed lodge meetings for 2026 if not already present
         _seed_loge_events_2026()
+
+        # Seed unavailable dates for lodge members 2026
+        _seed_unavailable_dates_2026()
 
 
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').
