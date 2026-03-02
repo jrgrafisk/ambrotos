@@ -1179,7 +1179,7 @@ def list_group_events():
     if not team:
         return jsonify([])
     today = date.today()
-    cutoff = today + timedelta(days=183)
+    cutoff = today + timedelta(days=365)
     events = GroupEvent.query.filter(
         GroupEvent.team_id == team.id,
         db.or_(
