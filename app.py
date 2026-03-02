@@ -1636,6 +1636,142 @@ def admin_backup_now():
         return jsonify({'error': str(exc)}), 500
 
 
+@app.route('/api/admin/restore-from-ftp', methods=['POST'])
+@login_required
+@admin_required
+def admin_restore_from_ftp():
+    """Download en navngiven backup fra FTP /ambrotos/manualbackup/ og gendan hele DB."""
+    req_data = request.get_json() or {}
+    filename = req_data.get('filename', '')
+    if not filename or '/' in filename or '..' in filename:
+        return jsonify({'error': 'Ugyldigt filnavn'}), 400
+
+    host     = os.environ.get('FTP_HOST', '')
+    ftp_user = os.environ.get('FTP_USER', '')
+    passwd   = os.environ.get('FTP_PASS', '')
+    if not (host and ftp_user and passwd):
+        return jsonify({'error': 'FTP er ikke konfigureret på serveren'}), 503
+
+    # 1. Download fra FTP
+    try:
+        ftp = ftplib.FTP_TLS(host, timeout=30)
+        ftp.login(ftp_user, passwd)
+        ftp.prot_p()
+        buf = io.BytesIO()
+        ftp.retrbinary(f'RETR /ambrotos/manualbackup/{filename}', buf.write)
+        ftp.quit()
+        backup_data = json.loads(buf.getvalue().decode('utf-8'))
+    except Exception as exc:
+        return jsonify({'error': f'FTP download fejlede: {exc}'}), 500
+
+    version = backup_data.get('version', 1)
+
+    # 2. Ryd alle tabeller i FK-sikker rækkefølge
+    try:
+        EventComment.query.delete()
+        GroupEvent.query.delete()
+        UnavailableDate.query.delete()
+        UserTeam.query.delete()
+        User.query.delete()
+        Team.query.delete()
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': f'Sletning af eksisterende data fejlede: {exc}'}), 500
+
+    # 3. Gendan data (samme logik som restore_from_backup, men uden empty-check)
+    try:
+        team_id_map: dict = {}
+        if version >= 2:
+            for item in backup_data.get('teams', []):
+                t = Team(name=item['name'], description=item.get('description', ''))
+                db.session.add(t)
+                db.session.flush()
+                team_id_map[item['id']] = t.id
+
+        for item in backup_data.get('users', []):
+            db.session.add(User(
+                id=item['id'],
+                username=item['username'],
+                password_hash=item['password_hash'],
+                color=item['color'],
+                is_admin=item.get('is_admin', False),
+            ))
+        db.session.flush()
+        valid_user_ids = {u.id for u in User.query.all()}
+
+        if version >= 2:
+            for item in backup_data.get('user_teams', []):
+                new_tid = team_id_map.get(item['team_id'])
+                if new_tid and item['user_id'] in valid_user_ids:
+                    db.session.add(UserTeam(
+                        user_id=item['user_id'],
+                        team_id=new_tid,
+                        is_team_admin=item.get('is_team_admin', False),
+                    ))
+
+        for item in backup_data.get('unavailable_dates', []):
+            if item['user_id'] not in valid_user_ids:
+                continue
+            raw_tid = item.get('team_id')
+            new_tid = team_id_map.get(raw_tid) if raw_tid else None
+            db.session.add(UnavailableDate(
+                user_id=item['user_id'],
+                team_id=new_tid,
+                date=date.fromisoformat(item['date']),
+            ))
+
+        id_map: dict = {}
+        for item in backup_data.get('group_events', []):
+            if item['created_by'] not in valid_user_ids:
+                continue
+            raw_tid = item.get('team_id')
+            new_tid = team_id_map.get(raw_tid) if raw_tid else None
+            end_date_str = item.get('end_date')
+            org1 = item.get('organizer1_id')
+            org2 = item.get('organizer2_id')
+            ev = GroupEvent(
+                team_id=new_tid,
+                title=item['title'],
+                description=item.get('description', ''),
+                date=date.fromisoformat(item['date']),
+                end_date=date.fromisoformat(end_date_str) if end_date_str else None,
+                created_by=item['created_by'],
+                organizer1_id=org1 if org1 in valid_user_ids else None,
+                organizer2_id=org2 if org2 in valid_user_ids else None,
+                created_at=datetime.fromisoformat(item.get('created_at', datetime.utcnow().isoformat())),
+            )
+            db.session.add(ev)
+            db.session.flush()
+            id_map[item['id']] = ev.id
+
+        for item in backup_data.get('event_comments', []):
+            new_eid = id_map.get(item['event_id'])
+            if new_eid and item['user_id'] in valid_user_ids:
+                db.session.add(EventComment(
+                    event_id=new_eid,
+                    user_id=item['user_id'],
+                    text=item['text'],
+                    is_hidden=item.get('is_hidden', False),
+                    created_at=datetime.fromisoformat(item.get('created_at', datetime.utcnow().isoformat())),
+                ))
+
+        db.session.commit()
+        write_backup()
+        counts = {
+            'teams': Team.query.count(),
+            'users': User.query.count(),
+            'unavailable_dates': UnavailableDate.query.count(),
+            'group_events': GroupEvent.query.count(),
+            'event_comments': EventComment.query.count(),
+        }
+        print(f'✓ DB gendannet fra FTP manualbackup/{filename}: {counts}')
+        return jsonify({'ok': True, 'filename': filename, 'restored': counts})
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': f'Gendannelse fejlede: {exc}'}), 500
+
+
 # ── Admin team management routes ────────────────────────────────────────────────
 
 @app.route('/api/admin/teams', methods=['GET'])
