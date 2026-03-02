@@ -341,7 +341,8 @@ _backup_status = {
     'ftp_enabled': False,
     'ftp_error': None,  # Sidst kendte fejlbesked fra FTP-upload
 }
-_ftp_lock = threading.Lock()  # Serialiserer FTP-uploads — forhindrer samtidige rename-konflikter
+_ftp_lock    = threading.Lock()   # kun én FTP-worker ad gangen
+_ftp_pending = threading.Event()  # sættes når ny backup-fil er klar til upload
 
 
 def write_backup():
@@ -2190,13 +2191,62 @@ def _has_changes_since_backup() -> bool:
             or live_ec != saved_ec or live_users != saved_users)
 
 
+def _do_ftp_upload():
+    """Uploader BACKUP_FILE og backup_1 til FTP med rotation (backup_1→backup_2→backup_3).
+    Kaldes udelukkende fra _ftp_upload_worker() der holder _ftp_lock."""
+    host       = os.environ.get('FTP_HOST', '')
+    ftp_user   = os.environ.get('FTP_USER', '')
+    passwd     = os.environ.get('FTP_PASS', '')
+    remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
+    if not (host and ftp_user and passwd):
+        return
+    try:
+        ftp = ftplib.FTP_TLS(host, timeout=30)
+        ftp.login(ftp_user, passwd)
+        ftp.prot_p()
+        _ftp_ensure_dir(ftp, remote_dir)
+        for n in (2, 1):
+            try:
+                ftp.rename(f'calendar_backup_{n}.json', f'calendar_backup_{n + 1}.json')
+            except ftplib.error_perm:
+                pass  # Filen fandtes ikke endnu
+        backup_1 = os.path.join(os.path.dirname(BACKUP_FILE), 'calendar_backup_1.json')
+        with open(backup_1, 'rb') as f:
+            ftp.storbinary('STOR calendar_backup_1.json', f)
+        with open(BACKUP_FILE, 'rb') as f:
+            ftp.storbinary('STOR calendar_backup.json', f)
+        ftp.quit()
+        _backup_status['ftp_ok']    = True
+        _backup_status['ftp_time']  = datetime.utcnow().isoformat()
+        _backup_status['ftp_error'] = None
+        print('✓ FTP-backup uploadet (calendar_backup + backup_1/2/3 roteret)')
+    except Exception as exc:
+        _backup_status['ftp_ok']    = False
+        _backup_status['ftp_time']  = datetime.utcnow().isoformat()
+        _backup_status['ftp_error'] = str(exc)
+        print(f'⚠ FTP-upload fejlede: {exc}')
+
+
+def _ftp_upload_worker():
+    """Kører i én baggrundstråd (holder _ftp_lock). Uploader til FTP i en løkke
+    så længe _ftp_pending er sat — garanterer at ingen skrivning mistes selvom
+    uploads overlapper: ny write sætter _ftp_pending, worker laver én ekstra tur."""
+    try:
+        while _ftp_pending.wait(timeout=0.5):  # True hvis event sat; False efter 0.5 s tomgang
+            _ftp_pending.clear()
+            _do_ftp_upload()
+        # Ingen ventende uploads i 0.5 s → worker afslutter og frigiver lock
+    finally:
+        _ftp_lock.release()
+
+
 def _rotate_and_push_backups():
-    """Rotér de nummererede backup-filer lokalt og på FTP.
+    """Rotér backup-filer lokalt og start FTP-worker hvis ikke allerede kørende.
     backup_1 = nyeste, backup_3 = ældste. Forudsætter at BACKUP_FILE netop er skrevet."""
     import shutil
     data_dir = os.path.dirname(BACKUP_FILE)
 
-    # Lokal rotation: 2→3, 1→2, current→1
+    # Lokal rotation: 2→3, 1→2, current→1 (synkront)
     for n in (2, 1):
         src = os.path.join(data_dir, f'calendar_backup_{n}.json')
         dst = os.path.join(data_dir, f'calendar_backup_{n + 1}.json')
@@ -2205,48 +2255,10 @@ def _rotate_and_push_backups():
     if os.path.exists(BACKUP_FILE):
         shutil.copy2(BACKUP_FILE, os.path.join(data_dir, 'calendar_backup_1.json'))
 
-    def _ftp_rotate():
-        if not _ftp_lock.acquire(blocking=False):
-            return  # En upload kører allerede; den læser BACKUP_FILE ved upload-tidspunkt
-        try:
-            host = os.environ.get('FTP_HOST', '')
-            user = os.environ.get('FTP_USER', '')
-            passwd = os.environ.get('FTP_PASS', '')
-            remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
-            if not (host and user and passwd):
-                return
-            try:
-                ftp = ftplib.FTP_TLS(host, timeout=30)
-                ftp.login(user, passwd)
-                ftp.prot_p()
-                _ftp_ensure_dir(ftp, remote_dir)
-
-                # Rename på FTP: 2→3, 1→2
-                for n in (2, 1):
-                    try:
-                        ftp.rename(f'calendar_backup_{n}.json', f'calendar_backup_{n + 1}.json')
-                    except ftplib.error_perm:
-                        pass  # Filen fandtes ikke endnu
-
-                backup_1 = os.path.join(os.path.dirname(BACKUP_FILE), 'calendar_backup_1.json')
-                with open(backup_1, 'rb') as f:
-                    ftp.storbinary('STOR calendar_backup_1.json', f)
-                with open(BACKUP_FILE, 'rb') as f:
-                    ftp.storbinary('STOR calendar_backup.json', f)
-                ftp.quit()
-                _backup_status['ftp_ok'] = True
-                _backup_status['ftp_time'] = datetime.utcnow().isoformat()
-                _backup_status['ftp_error'] = None
-                print('✓ Roteret FTP-backup (calendar_backup_1/2/3.json opdateret)')
-            except Exception as exc:
-                _backup_status['ftp_ok'] = False
-                _backup_status['ftp_time'] = datetime.utcnow().isoformat()
-                _backup_status['ftp_error'] = str(exc)
-                print(f'⚠ FTP rotation fejlede: {exc}')
-        finally:
-            _ftp_lock.release()
-
-    threading.Thread(target=_ftp_rotate).start()  # Non-daemon: processen venter på upload ved shutdown
+    _ftp_pending.set()                         # signal: ny backup klar til FTP
+    if _ftp_lock.acquire(blocking=False):      # kun én worker ad gangen
+        threading.Thread(target=_ftp_upload_worker).start()
+    # Hvis lock er optaget: eksisterende worker ser _ftp_pending og laver én ekstra tur
 
 
 def _start_daily_backup_thread():
