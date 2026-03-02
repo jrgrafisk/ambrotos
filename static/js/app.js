@@ -640,3 +640,30 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+
+/* ── ICS-abonnement ──────────────────────────────────── */
+
+async function showIcsUrl() {
+  const box = document.getElementById('icsUrlBox');
+  const input = document.getElementById('icsUrlInput');
+  if (box.style.display !== 'none') return;
+  try {
+    const res = await fetch('/api/my-ics-url');
+    const data = await res.json();
+    input.value = data.url;
+    box.style.display = 'block';
+    document.getElementById('icsSubscribeBtn').style.display = 'none';
+  } catch (e) {
+    alert('Kunne ikke hente abonnements-URL.');
+  }
+}
+
+function copyIcsUrl() {
+  const input = document.getElementById('icsUrlInput');
+  navigator.clipboard.writeText(input.value).then(() => {
+    const btn = input.nextElementSibling;
+    const orig = btn.textContent;
+    btn.textContent = 'Kopieret!';
+    setTimeout(() => { btn.textContent = orig; }, 2000);
+  });
+}

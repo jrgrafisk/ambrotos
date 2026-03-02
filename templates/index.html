@@ -83,6 +83,17 @@
         </div>
       </div>
 
+      <!-- Kalenderabonnement -->
+      <div class="card ics-subscribe-card">
+        <h3 class="card-title">Kalenderabonnement</h3>
+        <p class="ics-subscribe-hint">Abonner på gruppeevents i din kalender-app.</p>
+        <button id="icsSubscribeBtn" class="btn btn-outline btn-sm" onclick="showIcsUrl()">Vis abonnements-URL</button>
+        <div id="icsUrlBox" style="display:none">
+          <input id="icsUrlInput" type="text" readonly class="ics-url-input">
+          <button class="btn btn-outline btn-sm" onclick="copyIcsUrl()">Kopiér</button>
+        </div>
+      </div>
+
     </aside>
   </div>
 </div>

@@ -250,6 +250,7 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(256), nullable=False)
     color = db.Column(db.String(7), nullable=False, default='#1e88e5')
     is_admin = db.Column(db.Boolean, nullable=False, default=False)
+    ics_token = db.Column(db.String(64), unique=True, nullable=True)
     unavailable_dates = db.relationship(
         'UnavailableDate', backref='user', lazy=True, cascade='all, delete-orphan'
     )
@@ -777,6 +778,50 @@ def generate_ics(team=None) -> str:
     return '\r\n'.join(_ics_fold(ln) for ln in output) + '\r\n'
 
 
+def _generate_feed_ics(events: list, cal_name: str = 'Ambrotos') -> str:
+    """Generate a RFC 5545 iCalendar string with only GroupEvents (for token-based feed)."""
+    now_stamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+
+    def vevent(uid, summary, dtstart, dtend, description=''):
+        lines = [
+            'BEGIN:VEVENT',
+            f'UID:{uid}',
+            f'DTSTAMP:{now_stamp}',
+            f'DTSTART;VALUE=DATE:{dtstart}',
+            f'DTEND;VALUE=DATE:{dtend}',
+            f'SUMMARY:{_ics_escape(summary)}',
+        ]
+        if description:
+            lines.append(f'DESCRIPTION:{_ics_escape(description)}')
+        lines.append('CATEGORIES:GROUP-EVENT')
+        lines.append('END:VEVENT')
+        return lines
+
+    output = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        f'PRODID:-//Ambrotos//{_ics_escape(cal_name)}//DA',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH',
+        f'X-WR-CALNAME:{_ics_escape(cal_name)}',
+        'X-WR-TIMEZONE:Europe/Copenhagen',
+    ]
+
+    for ev in events:
+        last_day = ev.end_date if ev.end_date and ev.end_date > ev.date else ev.date
+        nxt = (last_day + timedelta(days=1)).strftime('%Y%m%d')
+        output += vevent(
+            uid=f'ambrotos-event-{ev.id}@ambrotos',
+            summary=ev.title,
+            dtstart=ev.date.strftime('%Y%m%d'),
+            dtend=nxt,
+            description=ev.description or '',
+        )
+
+    output.append('END:VCALENDAR')
+    return '\r\n'.join(_ics_fold(ln) for ln in output) + '\r\n'
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 from functools import wraps
@@ -1013,6 +1058,30 @@ def serve_ics():
         mimetype='text/calendar; charset=utf-8',
         headers={'Content-Disposition': f'inline; filename="{filename}"'},
     )
+
+
+@app.route('/feed/<token>.ics')
+def user_ics_feed(token):
+    user = User.query.filter_by(ics_token=token).first_or_404()
+    team_ids = [ut.team_id for ut in UserTeam.query.filter_by(user_id=user.id).all()]
+    events = GroupEvent.query.filter(GroupEvent.team_id.in_(team_ids)).order_by(GroupEvent.date).all()
+    team_names = [t.name for t in Team.query.filter(Team.id.in_(team_ids)).all()]
+    cal_name = ' & '.join(team_names) if team_names else 'Ambrotos'
+    return Response(
+        _generate_feed_ics(events, cal_name),
+        mimetype='text/calendar; charset=utf-8',
+        headers={'Content-Disposition': 'inline; filename="ambrotos.ics"'},
+    )
+
+
+@app.route('/api/my-ics-url')
+@login_required
+def my_ics_url():
+    if not current_user.ics_token:
+        current_user.ics_token = secrets.token_urlsafe(32)
+        db.session.commit()
+    url = request.host_url.rstrip('/') + f'/feed/{current_user.ics_token}.ics'
+    return jsonify({'url': url})
 
 
 @app.route('/api/events')
@@ -1973,6 +2042,10 @@ def migrate_db():
             cols = {c['name'] for c in inspector.get_columns('unavailable_dates')}
             if 'team_id' not in cols:
                 conn.execute(sa_text("ALTER TABLE unavailable_dates ADD COLUMN team_id INTEGER REFERENCES teams(id)"))
+        if inspector.has_table('users'):
+            cols = {c['name'] for c in inspector.get_columns('users')}
+            if 'ics_token' not in cols:
+                conn.execute(sa_text("ALTER TABLE users ADD COLUMN ics_token VARCHAR(64)"))
 
 
 def _migrate_to_teams() -> bool:

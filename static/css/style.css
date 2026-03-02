@@ -1135,3 +1135,24 @@ html, body {
 
   .events-card { min-height: 320px; }
 }
+
+/* ── ICS subscribe card ──────────────────────────────── */
+.ics-subscribe-card { flex: 0 0 auto; }
+
+.ics-subscribe-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+
+.ics-url-input {
+  width: 100%;
+  font-size: 11px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  margin: 8px 0 6px;
+  box-sizing: border-box;
+}
