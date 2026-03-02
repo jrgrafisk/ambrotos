@@ -1,0 +1,99 @@
+# Automatiske daglige backups kl. 12 og 22
+
+Denne løsning tilføjer en **automatisk backup-funktion**, der kører hver dag kl. 12:00 og 22:00, udover den eksisterende backup-logik, der kører ved ændringer i databasen.
+
+## 1. Tilføj afhængighed
+Tilføj `apscheduler` til `requirements.txt`:
+```txt
+apscheduler>=3.9.1
+```
+
+## 2. Tilføj backup-scheduler til `app.py`
+Tilføj følgende kode **øverst i `app.py`** (fx efter `import`-sektionen):
+
+```python
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+# Opret en scheduler til daglige backups
+backup_scheduler = BackgroundScheduler()
+
+def scheduled_backup():
+    """Kaldes af scheduleren for at tage en backup kl. 12 og 22."""
+    with app.app_context():
+        print("🕒 Kører planlagt backup...")
+        write_backup()
+        push_backup_to_ftp()
+
+# Start scheduleren, når appen starter
+def start_backup_scheduler():
+    # Kør hver dag kl. 12:00 og 22:00
+    backup_scheduler.add_job(
+        scheduled_backup,
+        trigger=CronTrigger(hour="12,22", timezone="Europe/Copenhagen"),
+        id="daily_backup",
+        name="Tag daglig backup kl. 12 og 22",
+        replace_existing=True,
+    )
+    backup_scheduler.start()
+    print("⏰ Backup-scheduler startet (kl. 12 og 22).")
+```
+
+## 3. Opdater `app.py` for at starte scheduleren
+Find linjen, hvor `app` initialiseres (fx efter `init_db()`), og tilføj:
+
+```python
+# Start backup-scheduleren
+start_backup_scheduler()
+```
+
+Eksempel:
+```python
+if __name__ == '__main__':
+    init_db()
+    start_backup_scheduler()  # Tilføj denne linje
+    app.run(debug=True, host='0.0.00', port=5000)
+```
+
+## 4. Installer afhængigheden
+Kør:
+```bash
+pip install apscheduler>=3.9.1
+```
+
+## 5. Vigtige noter
+- **Hosting-kompatibilitet**: Render Free/Starter understøtter ikke langkørende processer. Brug **Pro-planen** eller en **ekstern cron-job-tjeneste** (fx Cron-job.org).
+- **Logs**: Du vil se `🕒 Kører planlagt backup...` i loggen, når en backup køres.
+- **Fejlfinding**: Tjek loggen for fejlmeddelelser, hvis backups ikke køres.
+
+## 6. Alternativ: Ekstern cron-job (hvis scheduleren ikke virker)
+Hvis din hosting ikke understøtter `apscheduler`, kan du oprette et **ny endpoint** og kalde det via en ekstern cron-tjeneste:
+
+### Tilføj et endpoint til manuel backup
+```python
+@app.route('/admin/trigger-backup', methods=['POST'])
+@admin_required
+def trigger_backup():
+    write_backup()
+    push_backup_to_ftp()
+    return jsonify({"status": "success", "message": "Backup triggeret manuelt."})
+```
+
+### Opsæt en cron-job eksternt
+1. Opret en cron-job på [Cron-job.org](https://cron-job.org/) eller [EasyCron](https://www.easycron.com/).
+2. Indstil den til at kalde:
+   ```
+   POST https://ambrotos.jrgrafisk.dk/admin/trigger-backup
+   ```
+   hver dag kl. 12:00 og 22:00.
+3. Tilføj en **API-nøgle** eller **basic auth** for at sikre endpointet.
+
+## 7. Test løsningen
+- **Lokalt**: Kør appen og vent til kl. 12 eller 22 (eller ændr tiden midlertidigt til test).
+  - Du bør se `🕒 Kører planlagt backup...` i loggen.
+- **På Render**: Hvis du bruger Pro-planen, bør det virke. Ellers brug det eksterne cron-alternativ.
+
+## 8. Fejlfinding
+- **Logs**: Tjek loggen for `🕒 Kører planlagt backup...`. Hvis du ikke ser det, kører scheduleren ikke.
+- **FTP-fejl**: Hvis FTP-upload fejler, tjek `FTP_HOST`, `FTP_USER`, og `FTP_PASS`.
+- **Timeouts**: På delt hosting kan langkørende processer dræbes. Brug en VPS eller ekstern cron-job.
