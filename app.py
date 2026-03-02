@@ -1657,8 +1657,9 @@ def admin_restore_from_ftp():
         ftp = ftplib.FTP_TLS(host, timeout=30)
         ftp.login(ftp_user, passwd)
         ftp.prot_p()
+        _ftp_ensure_dir(ftp, '/ambrotos/manualbackup')
         buf = io.BytesIO()
-        ftp.retrbinary(f'RETR /ambrotos/manualbackup/{filename}', buf.write)
+        ftp.retrbinary(f'RETR {filename}', buf.write)
         ftp.quit()
         backup_data = json.loads(buf.getvalue().decode('utf-8'))
     except Exception as exc:
