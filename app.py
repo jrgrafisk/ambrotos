@@ -1636,6 +1636,28 @@ def admin_backup_now():
         return jsonify({'error': str(exc)}), 500
 
 
+@app.route('/api/admin/list-backups')
+@login_required
+@admin_required
+def admin_list_backups():
+    """List de 5 seneste manuelle backups i FTP /ambrotos/manualbackup/."""
+    host     = os.environ.get('FTP_HOST', '')
+    ftp_user = os.environ.get('FTP_USER', '')
+    passwd   = os.environ.get('FTP_PASS', '')
+    if not (host and ftp_user and passwd):
+        return jsonify({'error': 'FTP er ikke konfigureret på serveren'}), 503
+    try:
+        ftp = ftplib.FTP_TLS(host, timeout=30)
+        ftp.login(ftp_user, passwd)
+        ftp.prot_p()
+        _ftp_ensure_dir(ftp, '/ambrotos/manualbackup')
+        files = sorted([f for f in ftp.nlst() if f.endswith('.json')], reverse=True)
+        ftp.quit()
+        return jsonify({'backups': files[:5]})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
 @app.route('/api/admin/restore-from-ftp', methods=['POST'])
 @login_required
 @admin_required

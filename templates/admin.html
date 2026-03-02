@@ -14,6 +14,7 @@
       {% if is_super_admin %}<button class="btn btn-outline btn-sm" onclick="openAddTeamModal()">+ Nyt team</button>{% endif %}
       <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Tilføj bruger</button>
       <button class="btn btn-outline btn-sm" id="backupNowBtn" onclick="triggerManualBackup()">💾 Backup nu</button>
+      {% if is_super_admin %}<button class="btn btn-outline btn-sm" onclick="openRestoreModal()">↩ Gendan fra backup</button>{% endif %}
       <span id="backupNowStatus" style="font-size:13px;color:var(--text-muted)"></span>
     </div>
   </header>
@@ -244,6 +245,26 @@
     </div>
   </div>
 </div>
+
+<!-- ── Gendan fra backup modal ──────────────────────────────────── -->
+<div class="modal-overlay" id="restoreOverlay" style="display:none" onclick="if(event.target===this)closeRestoreModal()">
+  <div class="modal" style="max-width:480px">
+    <h3>Gendan fra backup</h3>
+    <div id="restoreListWrap">
+      <p id="restoreMsg">Henter tilgængelige backups…</p>
+      <ul id="restoreList" style="list-style:none;padding:0;margin:12px 0"></ul>
+    </div>
+    <div id="restoreConfirm" style="display:none">
+      <p style="color:#c0392b"><strong>⚠ Al eksisterende data slettes og erstattes af backup'en.</strong></p>
+      <p>Fil: <code id="restoreConfirmName"></code></p>
+      <button class="btn btn-danger" onclick="doRestore()">Bekræft gendannelse</button>
+      <button class="btn btn-outline" onclick="cancelRestoreConfirm()" style="margin-left:8px">Annullér</button>
+    </div>
+    <p id="restoreResultMsg" style="display:none;margin-top:12px"></p>
+    <button class="btn btn-outline btn-sm" onclick="closeRestoreModal()" style="margin-top:16px">Luk</button>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -537,10 +558,93 @@ async function copyResetLink() {
   document.getElementById('resetLinkCopied').style.display = 'block';
 }
 
+/* ── Gendan fra backup ──────────────────────────── */
+let _restorePending = null;
+
+function openRestoreModal() {
+  document.getElementById('restoreOverlay').style.display = 'flex';
+  document.getElementById('restoreMsg').textContent = 'Henter tilgængelige backups…';
+  document.getElementById('restoreList').innerHTML = '';
+  document.getElementById('restoreConfirm').style.display = 'none';
+  document.getElementById('restoreResultMsg').style.display = 'none';
+  document.getElementById('restoreListWrap').style.display = '';
+  fetch('/api/admin/list-backups')
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { document.getElementById('restoreMsg').textContent = 'Fejl: ' + data.error; return; }
+      document.getElementById('restoreMsg').textContent = data.backups.length ? 'Vælg en backup at gendanne:' : 'Ingen backups fundet.';
+      const ul = document.getElementById('restoreList');
+      data.backups.forEach(fn => {
+        const li = document.createElement('li');
+        li.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)';
+        li.innerHTML = `<span>${escapeHtml(formatBackupFilename(fn))}</span>
+          <button class="btn btn-outline btn-sm" onclick="confirmRestore('${escapeHtml(fn)}')">Gendan</button>`;
+        ul.appendChild(li);
+      });
+    })
+    .catch(() => { document.getElementById('restoreMsg').textContent = 'Kunne ikke hente backup-liste.'; });
+}
+
+function formatBackupFilename(fn) {
+  const m = fn.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.json$/);
+  if (!m) return fn;
+  const d = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+  return d.toLocaleString('da-DK', {day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'});
+}
+
+function confirmRestore(filename) {
+  _restorePending = filename;
+  document.getElementById('restoreListWrap').style.display = 'none';
+  document.getElementById('restoreConfirmName').textContent = filename;
+  document.getElementById('restoreConfirm').style.display = '';
+}
+
+function cancelRestoreConfirm() {
+  _restorePending = null;
+  document.getElementById('restoreConfirm').style.display = 'none';
+  document.getElementById('restoreListWrap').style.display = '';
+}
+
+async function doRestore() {
+  if (!_restorePending) return;
+  const btn = document.querySelector('#restoreConfirm .btn-danger');
+  btn.disabled = true; btn.textContent = '⏳ Gendanner…';
+  try {
+    const resp = await fetch('/api/admin/restore-from-ftp', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename: _restorePending})
+    });
+    const data = await resp.json();
+    document.getElementById('restoreConfirm').style.display = 'none';
+    const msg = document.getElementById('restoreResultMsg');
+    msg.style.display = '';
+    if (data.ok) {
+      const r = data.restored;
+      msg.style.color = 'var(--success, #43a047)';
+      msg.textContent = `✓ Gendannet: ${r.users} brugere, ${r.unavailable_dates} datoer, ${r.group_events} events.`;
+    } else {
+      msg.style.color = '#c0392b';
+      msg.textContent = 'Fejl: ' + (data.error || 'Ukendt fejl');
+    }
+  } catch {
+    document.getElementById('restoreResultMsg').style.display = '';
+    document.getElementById('restoreResultMsg').style.color = '#c0392b';
+    document.getElementById('restoreResultMsg').textContent = 'Netværksfejl – prøv igen.';
+  }
+  btn.disabled = false; btn.textContent = 'Bekræft gendannelse';
+  _restorePending = null;
+}
+
+function closeRestoreModal() {
+  document.getElementById('restoreOverlay').style.display = 'none';
+  _restorePending = null;
+}
+
 /* ── Keyboard shortcuts ─────────────────────────── */
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    closeEditModal(); closeAddModal(); closeAddTeamModal(); closeTeamMembersModal(); closeResetLinkModal();
+    closeEditModal(); closeAddModal(); closeAddTeamModal(); closeTeamMembersModal(); closeResetLinkModal(); closeRestoreModal();
   }
 });
 document.getElementById('editName').addEventListener('keydown', e => {
