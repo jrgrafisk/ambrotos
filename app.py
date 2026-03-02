@@ -2280,7 +2280,7 @@ def _start_daily_backup_thread():
             return  # En anden worker kører allerede scheduleren
 
         tz = ZoneInfo('Europe/Copenhagen')
-        BACKUP_HOURS = [6, 12, 22]
+        BACKUP_HOURS = [6, 13, 22]
         print('✓ Daglig backup-scheduler startet (kører kl. 06:00, 12:00 og 22:00 Copenhagen)')
         while True:
             now = datetime.now(tz)
