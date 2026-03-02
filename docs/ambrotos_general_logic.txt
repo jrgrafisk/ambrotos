@@ -1,0 +1,103 @@
+# Ambrotos: General Technical Description
+
+## 1. System Architecture
+Ambrotos is a **Flask-based web application** with the following core components:
+
+- **Frontend**: HTML/CSS/JS (FullCalendar library for calendar visualization)
+- **Backend**: Python/Flask with SQLAlchemy (SQLite or PostgreSQL)
+- **Dataflow**: REST API endpoints that handle user interactions and data storage
+- **Backup**: Automatic backup to JSON (local + FTP)
+
+---
+
+## 2. Core Features and Logic
+
+### A. User Management
+- **Models**:
+  - `User` (id, username, password_hash, color, is_admin)
+  - `Team` (id, name, description)
+  - `UserTeam` (user_id, team_id, is_team_admin)
+- **Access Control**:
+  - `LoginManager` manages sessions.
+  - `admin_required` and `team_admin_required` decorators ensure permissions.
+  - `current_user.is_team_admin_for(team_id)` checks team-admin status.
+
+### B. Calendar Logic
+- **Date Parsing**:
+  - `parse_dates_from_message(message)` converts Danish natural language (e.g., *"alle fredage i juli"*) to `date` objects.
+  - Supports patterns like:
+    - *"fra 1. til 5. april"*
+    - *"15. marts, 20. april og 3. maj"*
+    - *"alle tirsdage i juni"*
+  - Uses `dateparser` as a fallback.
+- **Unavailable Dates**:
+  - `UnavailableDate` stores user-specific dates.
+  - The calendar displays colored circles for unavailable members.
+
+### C. Group Events
+- **Models**:
+  - `GroupEvent` (id, team_id, title, description, date, end_date, created_by)
+  - `EventComment` (event_id, user_id, text, is_hidden)
+- **Features**:
+  - Create, edit, delete events.
+  - Add comments to events.
+  - View attendance (who is available/unavailable).
+
+### D. Backup and Restore
+- **Local Backup**:
+  - `write_backup()` saves all data (users, teams, events, comments) to `data/calendar_backup.json`.
+  - Called after every change.
+- **FTP Backup**:
+  - `push_backup_to_ftp()` uploads the backup file to an FTP server (asynchronously).
+  - `restore_from_backup()` restores data from the backup file on startup.
+
+### E. iCalendar Export
+- `generate_ics()` generates a `.ics` file with all events and unavailable dates.
+- Supports multi-day events and categories (e.g., "GROUP-EVENT").
+
+---
+
+## 3. API Endpoints
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/chat` | POST | Parses Danish text and adds/removes dates. |
+| `/api/unavailable/toggle` | POST | Toggles a single date as unavailable. |
+| `/api/group-events` | GET/POST | Fetches/creates group events. |
+| `/api/group-events/<id>` | GET/PUT/DELETE | Manages a single event. |
+| `/api/group-events/<id>/comments` | POST | Adds a comment to an event. |
+| `/api/admin/users` | GET/POST/PUT/DELETE | Admin management of users. |
+
+---
+
+## 4. Security and Validation
+- **Passwords**: Hashed with `werkzeug.security`.
+- **CSRF Protection**: Flask-Login manages sessions.
+- **Input Escaping**: User-provided text is escaped before DOM insertion.
+- **Backup Integrity**: Checks timestamps to use the latest backup.
+
+---
+
+## 5. Deployment
+- **cPanel/Passenger**: Configured via `passenger_wsgi.py`.
+- **Environment Variables**: `SECRET_KEY`, `DATABASE_URL`, `FTP_*` (optional).
+- **Static Files**: CSS/JS in `static/`, templates in `templates/`.
+
+---
+
+## 6. Example Dataflow
+1. User logs in → `LoginManager` validates.
+2. User writes *"alle fredage i juli"* → `parse_dates_from_message()` parses dates.
+3. Dates are saved in `UnavailableDate` → `write_backup()` updates backup.
+4. Calendar updates via FullCalendar API.
+
+---
+
+## 7. Error Handling
+- **Backup Errors**: Logged to stdout, but do not interrupt user flow.
+- **FTP Errors**: Asynchronous upload; errors logged without affecting the response.
+- **Date Parsing**: Returns an empty list for invalid input.
+
+---
+
+## 8. Conclusion
+Ambrotos is a robust team calendar application with a focus on Danish natural language date parsing, user management, and data persistence through local and FTP backups. The system is designed to be user-friendly, secure, and reliable.
