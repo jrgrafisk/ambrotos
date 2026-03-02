@@ -339,6 +339,7 @@ _backup_status = {
     'ftp_ok': None,     # True / False / None (disabled or unknown)
     'ftp_time': None,   # ISO string
     'ftp_enabled': False,
+    'ftp_error': None,  # Sidst kendte fejlbesked fra FTP-upload
 }
 
 
@@ -1780,6 +1781,7 @@ def api_backup_status():
         'ftp_ok': _backup_status['ftp_ok'],
         'ftp_time': ftp_time,
         'ftp_enabled': _backup_status['ftp_enabled'],
+        'ftp_error': _backup_status['ftp_error'],
     })
 
 
@@ -2057,10 +2059,12 @@ def _rotate_and_push_backups():
             ftp.quit()
             _backup_status['ftp_ok'] = True
             _backup_status['ftp_time'] = datetime.utcnow().isoformat()
+            _backup_status['ftp_error'] = None
             print('✓ Roteret FTP-backup (calendar_backup_1/2/3.json opdateret)')
         except Exception as exc:
             _backup_status['ftp_ok'] = False
             _backup_status['ftp_time'] = datetime.utcnow().isoformat()
+            _backup_status['ftp_error'] = str(exc)
             print(f'⚠ FTP rotation fejlede: {exc}')
 
     threading.Thread(target=_ftp_rotate, daemon=True).start()

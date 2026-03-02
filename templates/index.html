@@ -31,6 +31,7 @@
       <span id="backupIndicator" class="backup-indicator backup-indicator--unknown" title="Backup status ukendt">
         <span class="backup-dot"></span><span class="backup-label">Backup</span>
       </span>
+      {% if current_user.is_admin %}<span id="ftpErrorDetail" style="display:none;font-size:11px;color:var(--danger,#e53935);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title=""></span>{% endif %}
       <span class="user-dot" style="background: {{ current_user.color }}"></span>
       <span class="user-name">{{ current_user.username }}</span>
       {% if current_user.is_admin %}
@@ -201,8 +202,22 @@
     const localTime = timeAgo(data.local_time);
     const parts = [];
     if (data.local_time) parts.push('Lokal: ' + (localOk ? '✓' : '✗') + ' ' + localTime);
-    if (ftpEnabled) parts.push('FTP: ' + (ftpOk === true ? '✓' : ftpOk === false ? '✗' : '?') + (data.ftp_time ? ' ' + timeAgo(data.ftp_time) : ''));
+    if (ftpEnabled) {
+      let ftpLine = 'FTP: ' + (ftpOk === true ? '✓' : ftpOk === false ? '✗' : '?') + (data.ftp_time ? ' ' + timeAgo(data.ftp_time) : '');
+      if (ftpOk === false && data.ftp_error) ftpLine += '\n  ' + data.ftp_error;
+      parts.push(ftpLine);
+    }
     el.title = parts.length ? parts.join('\n') : 'Backup status ukendt';
+    const errorEl = document.getElementById('ftpErrorDetail');
+    if (errorEl) {
+      if (ftpEnabled && ftpOk === false && data.ftp_error) {
+        errorEl.textContent = 'FTP fejl: ' + data.ftp_error;
+        errorEl.title = data.ftp_error;
+        errorEl.style.display = '';
+      } else {
+        errorEl.style.display = 'none';
+      }
+    }
   }
 
   function fetchBackupStatus() {
