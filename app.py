@@ -686,9 +686,10 @@ def restore_from_backup():
         if restored_any:
             db.session.commit()
             print(f'✓ Data gendannet fra {BACKUP_FILE} (format v{version})')
-            write_backup()  # Re-write to ensure latest format
+        return restored_any
     except Exception as exc:
         print(f'⚠ Backup restore fejlede: {exc}')
+        return False
 
 
 def _ics_escape(text: str) -> str:
@@ -1972,10 +1973,10 @@ def migrate_db():
                 conn.execute(sa_text("ALTER TABLE unavailable_dates ADD COLUMN team_id INTEGER REFERENCES teams(id)"))
 
 
-def _migrate_to_teams():
+def _migrate_to_teams() -> bool:
     """Engangsmigration: tildel alle eksisterende rækker til et default 'Ambrotos' team."""
     if Team.query.count() > 0:
-        return  # Already migrated
+        return False  # Already migrated
     ambrotos = Team(name='Ambrotos', description='Standard team')
     db.session.add(ambrotos)
     db.session.flush()
@@ -1996,6 +1997,7 @@ def _migrate_to_teams():
     )
     db.session.commit()
     print('✓ Migreret til multi-team: Ambrotos team oprettet')
+    return True
 
 
 def _seed_unavailable_dates_2026():
@@ -2275,7 +2277,7 @@ def init_db():
         migrate_db()      # add new columns to existing tables
 
         # Try to restore from backup first (includes users if available)
-        restore_from_backup()
+        restored = restore_from_backup()
 
         # Fallback: seed default users only if no users exist (fresh install, no backup)
         if User.query.count() == 0:
@@ -2285,15 +2287,19 @@ def init_db():
                 db.session.add(user)
             db.session.commit()
             print(f"✓ Oprettet {len(MEMBER_NAMES)} standardbrugere (ingen backup fundet)")
+            # Vi skriver IKKE backup her: FTP-forbindelsen kan have fejlet midlertidigt
+            # på startup-tidspunktet, og vi vil ikke overskrive rigtig data på FTP
+            # med tomme standardbrugere.
         else:
             db_type = 'PostgreSQL' if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite'
             print(f"✓ Forbundet til {db_type} — {User.query.count()} brugere, data intakt")
 
-        # Migrate existing single-team data to multi-team structure
-        _migrate_to_teams()
+            # Migrate existing single-team data to multi-team structure
+            migrated = _migrate_to_teams()
 
-        # Persist the final post-startup state to backup (covers any migrations above)
-        write_backup()
+            # Persist state to backup only when we actually have real data to save
+            if restored or migrated:
+                write_backup()
 
 
 # Run on every startup (gunicorn imports this module, so __name__ != '__main__').
