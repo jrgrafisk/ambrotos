@@ -2280,23 +2280,28 @@ def _start_daily_backup_thread():
             return  # En anden worker kører allerede scheduleren
 
         tz = ZoneInfo('Europe/Copenhagen')
-        print('✓ Daglig backup-scheduler startet (kører kl. 06:00 Copenhagen)')
+        BACKUP_HOURS = [6, 12, 22]
+        print('✓ Daglig backup-scheduler startet (kører kl. 06:00, 12:00 og 22:00 Copenhagen)')
         while True:
             now = datetime.now(tz)
-            target = now.replace(hour=6, minute=0, second=0, microsecond=0)
-            if now >= target:
-                target += timedelta(days=1)
+            candidates = [
+                now.replace(hour=h, minute=0, second=0, microsecond=0)
+                for h in BACKUP_HOURS
+            ]
+            future = [t for t in candidates if t > now]
+            target = min(future) if future else min(candidates) + timedelta(days=1)
             time.sleep((target - now).total_seconds())
             try:
                 with app.app_context():
+                    now_str = datetime.now(tz).strftime('%H:%M')
                     if _has_changes_since_backup():
                         write_backup()
                         _rotate_and_push_backups()
-                        print('✓ Daglig backup med rotation gennemført (06:00)')
+                        print(f'✓ Planlagt backup gennemført ({now_str})')
                     else:
-                        print('✓ Daglig backup: ingen ændringer siden sidst, springer over')
+                        print(f'✓ Planlagt backup: ingen ændringer siden sidst, springer over ({now_str})')
             except Exception as exc:
-                print(f'⚠ Daglig backup fejlede: {exc}')
+                print(f'⚠ Planlagt backup fejlede: {exc}')
 
     threading.Thread(target=_run, daemon=True).start()
 
