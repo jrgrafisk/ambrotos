@@ -1062,6 +1062,7 @@ def serve_ics():
 
 @app.route('/feed/<token>.ics')
 def user_ics_feed(token):
+    from flask import Response
     user = User.query.filter_by(ics_token=token).first_or_404()
     team_ids = [ut.team_id for ut in UserTeam.query.filter_by(user_id=user.id).all()]
     events = GroupEvent.query.filter(GroupEvent.team_id.in_(team_ids)).order_by(GroupEvent.date).all()
