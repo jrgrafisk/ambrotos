@@ -6,7 +6,7 @@ import io
 import threading
 import secrets
 import calendar as cal_module
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 
 from sqlalchemy import text as sa_text, inspect as sa_inspect
 
@@ -2352,7 +2352,11 @@ def _start_daily_backup_thread():
         except OSError:
             return  # En anden worker kører allerede scheduleren
 
-        tz = ZoneInfo('Europe/Copenhagen')
+        try:
+            tz = ZoneInfo('Europe/Copenhagen')
+        except Exception as exc:
+            print(f'⚠ Backup-scheduler: ZoneInfo fejlede ({exc}), falder tilbage til UTC')
+            tz = timezone.utc
         BACKUP_HOURS = [6, 13, 22]
         print('✓ Daglig backup-scheduler startet (kører kl. 06:00, 12:00 og 22:00 Copenhagen)')
         while True:
@@ -2369,7 +2373,6 @@ def _start_daily_backup_thread():
                     now_str = datetime.now(tz).strftime('%H:%M')
                     if _has_changes_since_backup():
                         write_backup()
-                        _rotate_and_push_backups()
                         print(f'✓ Planlagt backup gennemført ({now_str})')
                     else:
                         print(f'✓ Planlagt backup: ingen ændringer siden sidst, springer over ({now_str})')
