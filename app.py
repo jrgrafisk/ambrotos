@@ -37,12 +37,11 @@ login_manager.login_view = 'login'
 login_manager.login_message = 'Log venligst ind for at fortsætte.'
 
 MEMBER_NAMES = [
-    'Anders Badsberg', 'Rasmus Bjerg', 'Mikael', 'Martin Bach',
-    'Anders Busch', 'Kristian', 'Rasmus Borup', 'Kasper',
-    'Bjarne', 'Jakob', 'Mikkel', 'Johan', 'Martin Kjær',
+    'Admin',
+    'Bruger 1', 'Bruger 2', 'Bruger 3', 'Bruger 4', 'Bruger 5',
 ]
 
-ADMIN_USERS = {'Kasper'}
+ADMIN_USERS = {'Admin'}
 
 MEMBER_COLORS = [
     '#e53935', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa',

@@ -75,14 +75,14 @@ cp .env.example .env
 python app.py
 ```
 
-Open http://localhost:5000 in your browser. Log in with any of the 13 usernames and the seed password (`123` for a fresh install with no backup).
+Open http://localhost:5000 in your browser. Log in with the seed admin user and password (`123` for a fresh install with no backup).
 
 ### Users
 
-The 13 pre-seeded users are:
-`Anders Badsberg`, `Rasmus Bjerg`, `Mikael`, `Martin Bach`, `Anders Busch`, `Kristian`, `Rasmus Borup`, `Kasper`, `Bjarne`, `Jakob`, `Mikkel`, `Johan`, `Martin Kjær`
+Demo seed users (fresh install with no backup):
+`Admin` (admin), `Bruger 1`, `Bruger 2`, `Bruger 3`, `Bruger 4`, `Bruger 5`
 
-Default seed password: `123` (existing deployments restore passwords from backup)
+Default seed password: `123`
 
 Admin users can manage all users at `/admin`.
 
