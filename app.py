@@ -1064,13 +1064,12 @@ def user_ics_feed(token):
     from flask import Response
     user = User.query.filter_by(ics_token=token).first_or_404()
     team_ids = [ut.team_id for ut in UserTeam.query.filter_by(user_id=user.id).all()]
-    events = GroupEvent.query.filter(GroupEvent.team_id.in_(team_ids)).order_by(GroupEvent.date).all()
-    team_names = [t.name for t in Team.query.filter(Team.id.in_(team_ids)).all()]
-    cal_name = ' & '.join(team_names) if team_names else 'Ambrotos'
+    team = Team.query.get(team_ids[0]) if team_ids else None
+    filename = f"{team.name.lower().replace(' ', '_')}.ics" if team else 'ambrotos.ics'
     return Response(
-        _generate_feed_ics(events, cal_name),
+        generate_ics(team),
         mimetype='text/calendar; charset=utf-8',
-        headers={'Content-Disposition': 'inline; filename="ambrotos.ics"'},
+        headers={'Content-Disposition': f'inline; filename="{filename}"'},
     )
 
 
@@ -1080,8 +1079,10 @@ def my_ics_url():
     if not current_user.ics_token:
         current_user.ics_token = secrets.token_urlsafe(32)
         db.session.commit()
-    url = request.host_url.rstrip('/') + f'/feed/{current_user.ics_token}.ics'
-    return jsonify({'url': url})
+    base = request.host_url.rstrip('/')
+    https_url = base + f'/feed/{current_user.ics_token}.ics'
+    webcal_url = https_url.replace('https://', 'webcal://', 1).replace('http://', 'webcal://', 1)
+    return jsonify({'url': https_url, 'webcal_url': webcal_url})
 
 
 @app.route('/api/events')

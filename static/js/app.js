@@ -651,6 +651,7 @@ async function showIcsUrl() {
     const res = await fetch('/api/my-ics-url');
     const data = await res.json();
     input.value = data.url;
+    document.getElementById('icsWebcalLink').href = data.webcal_url;
     box.style.display = 'block';
     document.getElementById('icsSubscribeBtn').style.display = 'none';
   } catch (e) {
