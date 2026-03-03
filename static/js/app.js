@@ -643,20 +643,13 @@ function escapeHtml(str) {
 
 /* ── ICS-abonnement ──────────────────────────────────── */
 
-async function showIcsUrl() {
+function showIcsUrl() {
   const box = document.getElementById('icsUrlBox');
   const input = document.getElementById('icsUrlInput');
   if (box.style.display !== 'none') return;
-  try {
-    const res = await fetch('/api/my-ics-url');
-    const data = await res.json();
-    input.value = data.url;
-    document.getElementById('icsWebcalLink').href = data.webcal_url;
-    box.style.display = 'block';
-    document.getElementById('icsSubscribeBtn').style.display = 'none';
-  } catch (e) {
-    alert('Kunne ikke hente abonnements-URL.');
-  }
+  input.value = window.location.origin + '/calendar.ics';
+  box.style.display = 'block';
+  document.getElementById('icsSubscribeBtn').style.display = 'none';
 }
 
 function copyIcsUrl() {

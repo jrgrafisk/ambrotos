@@ -1047,15 +1047,37 @@ def list_users():
 
 
 @app.route('/calendar.ics')
-@login_required
 def serve_ics():
     from flask import Response
-    team = get_current_team()
-    filename = f"{team.name.lower().replace(' ', '_')}.ics" if team else 'ambrotos.ics'
+
+    # Bruges fra browser (session-login)
+    if current_user.is_authenticated:
+        team = get_current_team()
+        filename = f"{team.name.lower().replace(' ', '_')}.ics" if team else 'ambrotos.ics'
+        return Response(
+            generate_ics(team),
+            mimetype='text/calendar; charset=utf-8',
+            headers={'Content-Disposition': f'inline; filename="{filename}"'},
+        )
+
+    # Bruges fra kalender-app (HTTP Basic Auth)
+    auth = request.authorization
+    if auth:
+        user = User.query.filter_by(username=auth.username).first()
+        if user and user.check_password(auth.password):
+            ut = UserTeam.query.filter_by(user_id=user.id).order_by(UserTeam.joined_at).first()
+            team = db.session.get(Team, ut.team_id) if ut else None
+            filename = f"{team.name.lower().replace(' ', '_')}.ics" if team else 'ambrotos.ics'
+            return Response(
+                generate_ics(team),
+                mimetype='text/calendar; charset=utf-8',
+                headers={'Content-Disposition': f'inline; filename="{filename}"'},
+            )
+
     return Response(
-        generate_ics(team),
-        mimetype='text/calendar; charset=utf-8',
-        headers={'Content-Disposition': f'inline; filename="{filename}"'},
+        'Log ind for at hente kalenderen.',
+        401,
+        {'WWW-Authenticate': 'Basic realm="Ambrotos"'},
     )
 
 
