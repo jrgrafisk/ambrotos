@@ -368,6 +368,7 @@ def write_backup():
                     'password_hash': u.password_hash,
                     'color': u.color,
                     'is_admin': u.is_admin,
+                    'ics_token': u.ics_token,
                 }
                 for u in User.query.order_by(User.id).all()
             ],
@@ -602,6 +603,7 @@ def restore_from_backup():
                         password_hash=item['password_hash'],
                         color=item['color'],
                         is_admin=item.get('is_admin', False),
+                        ics_token=item.get('ics_token'),
                     )
                     db.session.add(u)
                 db.session.flush()
@@ -1895,6 +1897,7 @@ def admin_restore_from_ftp():
                 password_hash=item['password_hash'],
                 color=item['color'],
                 is_admin=item.get('is_admin', False),
+                ics_token=item.get('ics_token'),
             ))
         db.session.flush()
         valid_user_ids = {u.id for u in User.query.all()}
@@ -2023,6 +2026,7 @@ def admin_restore_from_upload():
                 password_hash=item['password_hash'],
                 color=item['color'],
                 is_admin=item.get('is_admin', False),
+                ics_token=item.get('ics_token'),
             ))
         db.session.flush()
         valid_user_ids = {u.id for u in User.query.all()}
