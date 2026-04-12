@@ -248,10 +248,22 @@
 
 <!-- ── Gendan fra backup modal ──────────────────────────────────── -->
 <div class="modal-overlay" id="restoreOverlay" style="display:none" onclick="if(event.target===this)closeRestoreModal()">
-  <div class="modal" style="max-width:480px">
+  <div class="modal" style="max-width:520px">
     <h3>Gendan fra backup</h3>
+
+    <!-- Upload lokal fil -->
+    <div id="restoreUploadWrap" style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+      <p style="margin:0 0 8px;font-weight:500">Upload en lokal JSON-backup-fil:</p>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="file" id="restoreFileInput" accept=".json" style="flex:1;font-size:13px">
+        <button class="btn btn-outline btn-sm" onclick="doUploadRestore()">Gendan fra fil</button>
+      </div>
+      <p id="restoreUploadMsg" style="display:none;margin:8px 0 0;font-size:13px"></p>
+    </div>
+
+    <!-- FTP-backups -->
     <div id="restoreListWrap">
-      <p id="restoreMsg">Henter tilgængelige backups…</p>
+      <p id="restoreMsg">Henter tilgængelige backups fra FTP…</p>
       <ul id="restoreList" style="list-style:none;padding:0;margin:12px 0"></ul>
     </div>
     <div id="restoreConfirm" style="display:none">
@@ -642,6 +654,39 @@ async function doRestore() {
 function closeRestoreModal() {
   document.getElementById('restoreOverlay').style.display = 'none';
   _restorePending = null;
+}
+
+async function doUploadRestore() {
+  const input = document.getElementById('restoreFileInput');
+  const msgEl = document.getElementById('restoreUploadMsg');
+  if (!input.files || !input.files[0]) {
+    msgEl.style.display = '';
+    msgEl.style.color = '#c0392b';
+    msgEl.textContent = 'Vælg en .json-fil først.';
+    return;
+  }
+  if (!confirm('⚠ Al eksisterende data slettes og erstattes af den uploadede fil. Fortsæt?')) return;
+  msgEl.style.display = '';
+  msgEl.style.color = 'var(--text-muted)';
+  msgEl.textContent = '⏳ Uploader og gendanner…';
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  try {
+    const resp = await fetch('/api/admin/restore-from-upload', {method: 'POST', body: form});
+    const data = await resp.json();
+    if (data.ok) {
+      const r = data.restored;
+      msgEl.style.color = 'var(--success, #43a047)';
+      msgEl.textContent = `✓ Gendannet: ${r.users} brugere, ${r.unavailable_dates} datoer, ${r.group_events} events.`;
+      input.value = '';
+    } else {
+      msgEl.style.color = '#c0392b';
+      msgEl.textContent = 'Fejl: ' + (data.error || 'Ukendt fejl');
+    }
+  } catch {
+    msgEl.style.color = '#c0392b';
+    msgEl.textContent = 'Netværksfejl – prøv igen.';
+  }
 }
 
 /* ── Keyboard shortcuts ─────────────────────────── */
