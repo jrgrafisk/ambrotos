@@ -1082,7 +1082,6 @@ def serve_ics():
         {'WWW-Authenticate': 'Basic realm="Ambrotos"'},
     )
 
-
 @app.route('/feed/<token>.ics')
 def user_ics_feed(token):
     from flask import Response
@@ -1090,8 +1089,12 @@ def user_ics_feed(token):
     team_ids = [ut.team_id for ut in UserTeam.query.filter_by(user_id=user.id).all()]
     team = Team.query.get(team_ids[0]) if team_ids else None
     filename = f"{team.name.lower().replace(' ', '_')}.ics" if team else 'ambrotos.ics'
+    cal_name = team.name if team else 'Ambrotos'
+    events_q = GroupEvent.query.order_by(GroupEvent.date)
+    if team:
+        events_q = events_q.filter_by(team_id=team.id)
     return Response(
-        generate_ics(team),
+        _generate_feed_ics(events_q.all(), cal_name),
         mimetype='text/calendar; charset=utf-8',
         headers={'Content-Disposition': f'inline; filename="{filename}"'},
     )
