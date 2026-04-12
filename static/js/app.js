@@ -647,9 +647,18 @@ function showIcsUrl() {
   const box = document.getElementById('icsUrlBox');
   const input = document.getElementById('icsUrlInput');
   if (box.style.display !== 'none') return;
-  input.value = window.location.origin + '/calendar.ics';
-  box.style.display = 'block';
-  document.getElementById('icsSubscribeBtn').style.display = 'none';
+  fetch('/api/my-ics-url')
+    .then(r => r.json())
+    .then(data => {
+      input.value = data.webcal_url || data.url || '';
+      box.style.display = 'block';
+      document.getElementById('icsSubscribeBtn').style.display = 'none';
+    })
+    .catch(() => {
+      input.value = window.location.origin + '/calendar.ics';
+      box.style.display = 'block';
+      document.getElementById('icsSubscribeBtn').style.display = 'none';
+    });
 }
 
 function copyIcsUrl() {
