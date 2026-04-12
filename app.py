@@ -2314,7 +2314,14 @@ def _once_seed_activity_events_2026():
 
 
 def _has_changes_since_backup() -> bool:
-    """Sammenlign live DB med seneste backup. True = der er ændringer."""
+    """Sammenlign live DB med seneste backup. True = der er ændringer.
+
+    Returnerer False hvis DB kun indeholder standarddata (ingen rigtige datoer
+    eller events) — selv hvis lokal backup-fil mangler. Det forhindrer at en
+    genstartet server med tom DB overskriver en god FTP-backup."""
+    # Guard: if DB has no real data at all, there's nothing worth uploading
+    if UnavailableDate.query.count() == 0 and GroupEvent.query.count() == 0:
+        return False
     if not os.path.exists(BACKUP_FILE):
         return True
     try:
@@ -2475,7 +2482,18 @@ def _start_daily_backup_thread():
             try:
                 with app.app_context():
                     now_str = datetime.now(tz).strftime('%H:%M')
-                    if _has_changes_since_backup():
+                    # Safety: never overwrite FTP with an empty / just-seeded DB.
+                    # If the service restarted, FTP restore failed, and only default
+                    # users were seeded, we must NOT upload that empty state and
+                    # destroy the good backup already on FTP.
+                    has_real_data = (
+                        UnavailableDate.query.count() > 0
+                        or GroupEvent.query.count() > 0
+                    )
+                    if not has_real_data:
+                        print(f'⚠ Planlagt backup SPRUNGET OVER: DB indeholder kun standarddata '
+                              f'— FTP-backup bevares urørt ({now_str})')
+                    elif _has_changes_since_backup():
                         write_backup()
                         print(f'✓ Planlagt backup gennemført ({now_str})')
                     else:
