@@ -559,7 +559,7 @@ async function copyResetLink() {
 }
 
 /* ── Gendan fra backup ──────────────────────────── */
-let _restorePending = null;
+let _restorePending = null;  // {source, path, label}
 
 function openRestoreModal() {
   document.getElementById('restoreOverlay').style.display = 'flex';
@@ -572,30 +572,33 @@ function openRestoreModal() {
     .then(r => r.json())
     .then(data => {
       if (data.error) { document.getElementById('restoreMsg').textContent = 'Fejl: ' + data.error; return; }
-      document.getElementById('restoreMsg').textContent = data.backups.length ? 'Vælg en backup at gendanne:' : 'Ingen backups fundet.';
+      const backups = data.backups || [];
+      document.getElementById('restoreMsg').textContent = backups.length ? 'Vælg en backup at gendanne:' : 'Ingen backups fundet.';
       const ul = document.getElementById('restoreList');
-      data.backups.forEach(fn => {
+      backups.forEach(entry => {
+        // entry = {source, path, label, ts}
+        const label = entry.label || entry.path || String(entry);
+        const ts    = entry.ts ? ` <span style="color:var(--text-muted);font-size:12px">(${entry.ts.slice(0,16).replace('T',' ')})</span>` : '';
         const li = document.createElement('li');
         li.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)';
-        li.innerHTML = `<span>${escapeHtml(formatBackupFilename(fn))}</span>
-          <button class="btn btn-outline btn-sm" onclick="confirmRestore('${escapeHtml(fn)}')">Gendan</button>`;
+        const idx = ul.children.length;
+        li.innerHTML = `<span>${escapeHtml(label)}${ts}</span>
+          <button class="btn btn-outline btn-sm" onclick="confirmRestore(${idx})">Gendan</button>`;
+        li._backupEntry = entry;
         ul.appendChild(li);
       });
+      ul._entries = backups;
     })
     .catch(() => { document.getElementById('restoreMsg').textContent = 'Kunne ikke hente backup-liste.'; });
 }
 
-function formatBackupFilename(fn) {
-  const m = fn.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.json$/);
-  if (!m) return fn;
-  const d = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
-  return d.toLocaleString('da-DK', {day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'});
-}
-
-function confirmRestore(filename) {
-  _restorePending = filename;
+function confirmRestore(idx) {
+  const ul = document.getElementById('restoreList');
+  const entry = (ul._entries || [])[idx];
+  if (!entry) return;
+  _restorePending = entry;
   document.getElementById('restoreListWrap').style.display = 'none';
-  document.getElementById('restoreConfirmName').textContent = filename;
+  document.getElementById('restoreConfirmName').textContent = entry.label + ' (' + entry.path + ')';
   document.getElementById('restoreConfirm').style.display = '';
 }
 
@@ -613,7 +616,7 @@ async function doRestore() {
     const resp = await fetch('/api/admin/restore-from-ftp', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({filename: _restorePending})
+      body: JSON.stringify({source: _restorePending.source, path: _restorePending.path, filename: _restorePending.path})
     });
     const data = await resp.json();
     document.getElementById('restoreConfirm').style.display = 'none';

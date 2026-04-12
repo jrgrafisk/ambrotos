@@ -1735,20 +1735,85 @@ def admin_backup_now():
 @login_required
 @admin_required
 def admin_list_backups():
-    """List de 5 seneste manuelle backups i FTP /ambrotos/manualbackup/."""
+    """List alle tilgængelige FTP-backups fra alle kilder: hoved-rotation, predeploy og manuelle."""
     host     = os.environ.get('FTP_HOST', '')
     ftp_user = os.environ.get('FTP_USER', '')
     passwd   = os.environ.get('FTP_PASS', '')
+    remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
     if not (host and ftp_user and passwd):
         return jsonify({'error': 'FTP er ikke konfigureret på serveren'}), 503
+
+    def _peek_ts(ftp_conn, path, filename):
+        """Download first 200 bytes of a JSON file to read exported_at timestamp."""
+        try:
+            buf = io.BytesIO()
+            # Use RETR with a limit callback
+            chunks = []
+            def _grab(chunk):
+                chunks.append(chunk)
+                if sum(len(c) for c in chunks) > 500:
+                    raise Exception('enough')
+            try:
+                ftp_conn.retrbinary(f'RETR {filename}', _grab, blocksize=512)
+            except Exception:
+                pass
+            raw = b''.join(chunks)[:500].decode('utf-8', errors='replace')
+            # Find exported_at in raw text
+            import re
+            m = re.search(r'"exported_at"\s*:\s*"([^"]+)"', raw)
+            return m.group(1) if m else ''
+        except Exception:
+            return ''
+
     try:
         ftp = ftplib.FTP_TLS(host, timeout=30)
         ftp.login(ftp_user, passwd)
         ftp.prot_p()
-        _ftp_ensure_dir(ftp, '/ambrotos/manualbackup')
-        files = sorted([f for f in ftp.nlst() if f.endswith('.json')], reverse=True)
+
+        entries = []
+
+        # 1. Main rotation files in /ambrotos/
+        ftp.cwd('/')
+        _ftp_ensure_dir(ftp, remote_dir)
+        for fname, label in [
+            ('calendar_backup.json',   'Auto-backup (nyeste)'),
+            ('calendar_backup_1.json', 'Auto-backup rotation 1'),
+            ('calendar_backup_2.json', 'Auto-backup rotation 2'),
+            ('calendar_backup_3.json', 'Auto-backup rotation 3'),
+        ]:
+            try:
+                ftp.size(fname)  # raises if file doesn't exist
+                ts = _peek_ts(ftp, remote_dir, fname)
+                entries.append({'source': 'rotation', 'path': fname, 'label': label, 'ts': ts})
+            except Exception:
+                pass
+
+        # 2. Pre-deploy archives in /ambrotos/predeploy/
+        predeploy_dir = remote_dir.rstrip('/') + '/predeploy'
+        try:
+            ftp.cwd('/')
+            _ftp_ensure_dir(ftp, predeploy_dir)
+            pdfiles = sorted([f for f in ftp.nlst() if f.endswith('.json')], reverse=True)
+            for fname in pdfiles[:5]:
+                entries.append({'source': 'predeploy', 'path': fname,
+                                'label': f'Pre-deploy {fname.replace(".json", "")}', 'ts': ''})
+        except Exception:
+            pass
+
+        # 3. Manual backups in /ambrotos/manualbackup/
+        manualbackup_dir = remote_dir.rstrip('/') + '/manualbackup'
+        try:
+            ftp.cwd('/')
+            _ftp_ensure_dir(ftp, manualbackup_dir)
+            mbfiles = sorted([f for f in ftp.nlst() if f.endswith('.json')], reverse=True)
+            for fname in mbfiles[:5]:
+                entries.append({'source': 'manualbackup', 'path': fname,
+                                'label': f'Manuel {fname.replace(".json", "")}', 'ts': ''})
+        except Exception:
+            pass
+
         ftp.quit()
-        return jsonify({'backups': files[:5]})
+        return jsonify({'backups': entries})
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
 
@@ -1757,24 +1822,40 @@ def admin_list_backups():
 @login_required
 @admin_required
 def admin_restore_from_ftp():
-    """Download en navngiven backup fra FTP /ambrotos/manualbackup/ og gendan hele DB."""
+    """Download en navngiven backup fra FTP og gendan hele DB.
+    Accepterer source ('rotation'|'predeploy'|'manualbackup') og path (filnavn)."""
     req_data = request.get_json() or {}
-    filename = req_data.get('filename', '')
-    if not filename or '/' in filename or '..' in filename:
-        return jsonify({'error': 'Ugyldigt filnavn'}), 400
+    filename = req_data.get('filename', '') or req_data.get('path', '')
+    source   = req_data.get('source', 'manualbackup')
 
-    host     = os.environ.get('FTP_HOST', '')
-    ftp_user = os.environ.get('FTP_USER', '')
-    passwd   = os.environ.get('FTP_PASS', '')
+    if not filename or '..' in filename:
+        return jsonify({'error': 'Ugyldigt filnavn'}), 400
+    # Filnavnet må ikke indeholde '/' (vi tilføjer mappen selv)
+    if '/' in filename:
+        return jsonify({'error': 'Ugyldigt filnavn (ingen skråstreger)'}), 400
+
+    host       = os.environ.get('FTP_HOST', '')
+    ftp_user   = os.environ.get('FTP_USER', '')
+    passwd     = os.environ.get('FTP_PASS', '')
+    remote_dir = os.environ.get('FTP_PATH', '/ambrotos')
     if not (host and ftp_user and passwd):
         return jsonify({'error': 'FTP er ikke konfigureret på serveren'}), 503
 
+    # Bestem FTP-mappe ud fra source
+    if source == 'rotation':
+        ftp_dir = remote_dir
+    elif source == 'predeploy':
+        ftp_dir = remote_dir.rstrip('/') + '/predeploy'
+    else:  # manualbackup (default)
+        ftp_dir = remote_dir.rstrip('/') + '/manualbackup'
+
     # 1. Download fra FTP
     try:
-        ftp = ftplib.FTP_TLS(host, timeout=30)
+        ftp = ftplib.FTP_TLS(host, timeout=60)
         ftp.login(ftp_user, passwd)
         ftp.prot_p()
-        _ftp_ensure_dir(ftp, '/ambrotos/manualbackup')
+        ftp.cwd('/')
+        _ftp_ensure_dir(ftp, ftp_dir)
         buf = io.BytesIO()
         ftp.retrbinary(f'RETR {filename}', buf.write)
         ftp.quit()
@@ -1883,7 +1964,7 @@ def admin_restore_from_ftp():
             'group_events': GroupEvent.query.count(),
             'event_comments': EventComment.query.count(),
         }
-        print(f'✓ DB gendannet fra FTP manualbackup/{filename}: {counts}')
+        print(f'✓ DB gendannet fra FTP {source}/{filename}: {counts}')
         return jsonify({'ok': True, 'filename': filename, 'restored': counts})
     except Exception as exc:
         db.session.rollback()
