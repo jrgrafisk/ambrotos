@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: ambrotos-web
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - SECRET_KEY=${SECRET_KEY}
+      - DATABASE_URL=postgresql://ambrotos:${POSTGRES_PASSWORD}@db:5432/ambrotos
+      - FTP_HOST=${FTP_HOST}
+      - FTP_USER=${FTP_USER}
+      - FTP_PASS=${FTP_PASS}
+      - FTP_PATH=${FTP_PATH}
+    depends_on:
+      - db
+    volumes:
+      - ./data:/app/data
+    command: gunicorn --workers 2 --bind 0.0.0.0:8000 app:app
+
+  db:
+    image: postgres:15-alpine
+    container_name: ambrotos-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=ambrotos
+      - POSTGRES_USER=ambrotos
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # Optional: Nginx as reverse proxy (recommended for production)
+  nginx:
+    image: nginx:alpine
+    container_name: ambrotos-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:
